@@ -173,9 +173,21 @@ pub fn parse_lpstat_default(output: &str) -> Option<String> {
 }
 
 /// Render a `Segments` selection into a CUPS `page-ranges` value ("1-3,5").
-/// CUPS emits pages in ascending document order regardless of listed order.
+/// CUPS requires ascending, non-overlapping ranges and emits document order.
 pub fn cups_page_ranges(segments: &[PageSegmentRange]) -> String {
-    segments
+    let mut sorted = segments.to_vec();
+    sorted.sort_unstable_by_key(|segment| (segment.first, segment.last));
+    let mut merged: Vec<PageSegmentRange> = Vec::with_capacity(sorted.len());
+    for segment in sorted {
+        if let Some(previous) = merged.last_mut() {
+            if segment.first <= previous.last.saturating_add(1) {
+                previous.last = previous.last.max(segment.last);
+                continue;
+            }
+        }
+        merged.push(segment);
+    }
+    merged
         .iter()
         .map(|segment| {
             if segment.first == segment.last {
@@ -188,49 +200,220 @@ pub fn cups_page_ranges(segments: &[PageSegmentRange]) -> String {
         .join(",")
 }
 
-/// Media (paper size) values the picker offers. Fixed allowlist — the values
-/// are spliced into a `-o media=` option, so anything outside this set is
-/// rejected rather than passed to `lp`.
-pub const ALLOWED_MEDIA: &[&str] = &["Letter", "Legal", "A4"];
 /// Duplex values, as CUPS `sides` keywords.
 pub const ALLOWED_SIDES: &[&str] = &["one-sided", "two-sided-long-edge", "two-sided-short-edge"];
 /// Orientation choices, as semantic keywords mapped to `orientation-requested`.
 pub const ALLOWED_ORIENTATION: &[&str] = &["portrait", "landscape"];
 
-/// User-selected print options for the CUPS (`lp`) path: paper size, duplex,
-/// and orientation. Each is optional — `None` leaves the printer/PPD default
-/// in place. Values are validated against the allowlists above before they
-/// reach `lp`, so a caller can't inject arbitrary `-o` options.
+/// One raw printer capability token and its display label. `value` is passed
+/// back only after exact membership validation against a fresh printer query.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintOptionChoice {
+    pub value: String,
+    pub label: String,
+}
+
+/// Paper choices advertised by one native printer queue.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrinterCapabilities {
+    pub media: Vec<PrintOptionChoice>,
+    pub paper_sources: Vec<PrintOptionChoice>,
+}
+
+/// User-selected print options. Paper size/source are queue-advertised tokens;
+/// duplex and orientation keep their closed semantic allowlists. Every field
+/// is optional - `None` leaves the printer default in place.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PrintOptions {
-    /// CUPS `media` name (`Letter` / `Legal` / `A4`).
+    /// Exact CUPS `PageSize` choice advertised by the selected queue.
     pub media: Option<String>,
+    /// Exact CUPS `InputSlot` choice advertised by the selected queue.
+    pub paper_source: Option<String>,
     /// CUPS `sides` keyword (`one-sided` / `two-sided-long-edge` / …).
     pub sides: Option<String>,
     /// Semantic orientation (`portrait` / `landscape`).
     pub orientation: Option<String>,
 }
 
-/// Reject any option value outside its allowlist. The UI only ever sends fixed
-/// dropdown values; this is defense-in-depth against a malformed request
-/// smuggling an extra `-o` payload through the option string.
+/// Reject malformed paper tokens and semantic options before they reach a
+/// platform backend. Paper-token membership is checked against the selected
+/// queue separately, so this syntax guard cannot invent a supported choice.
 pub fn validate_print_options(options: &PrintOptions) -> OpResult<()> {
-    fn check(value: &Option<String>, allowed: &[&str], field: &str) -> OpResult<()> {
+    fn check_token(value: &Option<String>, field: &str) -> OpResult<()> {
         if let Some(value) = value {
-            if !allowed.contains(&value.as_str()) {
+            if !is_printer_option_token(value) {
                 return Err(PathOpError {
                     code: ERR_INVALID_INPUT,
-                    message: format!("unsupported {field} option: {value}"),
+                    message: format!("invalid {field} option"),
                 });
             }
         }
         Ok(())
     }
-    check(&options.media, ALLOWED_MEDIA, "paper size")?;
-    check(&options.sides, ALLOWED_SIDES, "duplex")?;
-    check(&options.orientation, ALLOWED_ORIENTATION, "orientation")?;
+    check_token(&options.media, "paper size")?;
+    check_token(&options.paper_source, "paper source")?;
+    if let Some(sides) = &options.sides {
+        if !ALLOWED_SIDES.contains(&sides.as_str()) {
+            return Err(PathOpError {
+                code: ERR_INVALID_INPUT,
+                message: format!("unsupported duplex option: {sides}"),
+            });
+        }
+    }
+    if let Some(orientation) = &options.orientation {
+        if !ALLOWED_ORIENTATION.contains(&orientation.as_str()) {
+            return Err(PathOpError {
+                code: ERR_INVALID_INPUT,
+                message: format!("unsupported orientation option: {orientation}"),
+            });
+        }
+    }
     Ok(())
+}
+
+/// Printer-provided values are single printable ASCII tokens. The bounded
+/// syntax check prevents option-string delimiters/control characters; exact
+/// printer membership is checked separately at submission time. A colon is
+/// retained for the Windows DMPAPER:/DMBIN: namespaces and is safe in argv.
+fn is_printer_option_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_PRINTER_OPTION_TOKEN_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'=' && byte != b'*')
+}
+
+fn is_cups_option_token(value: &str) -> bool {
+    is_printer_option_token(value)
+        && !value
+            .chars()
+            .any(|character| matches!(character, ':' | '\'' | '"' | '\\' | '{' | '}'))
+}
+
+const MAX_PRINTER_OPTION_TOKEN_BYTES: usize = 128;
+const MAX_PRINTER_OPTIONS_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_PRINTER_OPTION_CHOICES: usize = 512;
+
+/// Validate explicitly selected paper choices against a fresh capability
+/// snapshot for the same queue. An absent choice always leaves the queue's
+/// configured default in force.
+pub fn validate_options_for_capabilities(
+    options: &PrintOptions,
+    capabilities: &PrinterCapabilities,
+) -> OpResult<()> {
+    validate_print_options(options)?;
+    fn check(value: &Option<String>, choices: &[PrintOptionChoice], field: &str) -> OpResult<()> {
+        if let Some(value) = value {
+            if !choices.iter().any(|choice| choice.value == *value) {
+                return Err(PathOpError {
+                    code: ERR_INVALID_INPUT,
+                    message: format!("The selected {field} is no longer available for this printer. Choose it again."),
+                });
+            }
+        }
+        Ok(())
+    }
+    check(&options.media, &capabilities.media, "paper size")?;
+    check(
+        &options.paper_source,
+        &capabilities.paper_sources,
+        "paper source",
+    )?;
+    Ok(())
+}
+
+/// Parse the stable `lpoptions -p printer -l` shape for CUPS PPD choices.
+/// Option keywords and values are machine tokens; the localized display text
+/// is deliberately not used as the value or as a guessed IPP source name.
+pub fn parse_lpoptions_capabilities(output: &str) -> OpResult<PrinterCapabilities> {
+    if output.len() > MAX_PRINTER_OPTIONS_OUTPUT_BYTES {
+        return Err(PathOpError {
+            code: ERR_INVALID_INPUT,
+            message: "printer capability output exceeded its size limit".to_string(),
+        });
+    }
+
+    let mut capabilities = PrinterCapabilities::default();
+    let mut seen_media = false;
+    let mut seen_sources = false;
+    for line in output.lines() {
+        let Some((key, choices)) = parse_lpoptions_line(line) else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("PageSize") {
+            if seen_media {
+                capabilities.media.clear();
+                continue;
+            }
+            seen_media = true;
+            capabilities.media = choices.unwrap_or_default();
+        } else if key.eq_ignore_ascii_case("InputSlot") {
+            if seen_sources {
+                capabilities.paper_sources.clear();
+                continue;
+            }
+            seen_sources = true;
+            capabilities.paper_sources = choices.unwrap_or_default();
+        }
+    }
+    Ok(capabilities)
+}
+
+fn parse_lpoptions_line(line: &str) -> Option<(String, Option<Vec<PrintOptionChoice>>)> {
+    // The display label is localized and can itself contain colons; machine
+    // choice tokens may not. Use the final colon as the grammar delimiter.
+    let (first_header, _) = line.split_once(':')?;
+    let slash = first_header.find('/')?;
+    let key = first_header[..slash].trim();
+    if !matches!(key.to_ascii_lowercase().as_str(), "pagesize" | "inputslot") {
+        return None;
+    }
+    let (_, values) = line.rsplit_once(':')?;
+    // CUPS emits `keyword/display: choices`. Requiring whitespace after the
+    // final separator keeps malformed value text like `bad:evil` from being
+    // reinterpreted as a separator followed by the invented choice `evil`.
+    // Empty values are valid, for PPD options with no selectable choices.
+    if !values.is_empty() && !values.chars().next().is_some_and(char::is_whitespace) {
+        return Some((key.to_string(), None));
+    }
+    Some((key.to_string(), parse_lpoptions_choices(values)))
+}
+
+fn parse_lpoptions_choices(values: &str) -> Option<Vec<PrintOptionChoice>> {
+    let mut choices = Vec::new();
+    for raw in values.split_whitespace() {
+        let value = raw.strip_prefix('*').unwrap_or(raw);
+        if value.eq_ignore_ascii_case("Custom")
+            || value
+                .get(..7)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Custom."))
+        {
+            continue;
+        }
+        // A relevant line with an invalid or overlarge token is malformed;
+        // reject that line rather than exposing a partial/invented option.
+        if !is_cups_option_token(value) {
+            return None;
+        }
+        if choices.len() == MAX_PRINTER_OPTION_CHOICES {
+            return None;
+        }
+        if choices
+            .iter()
+            .any(|choice: &PrintOptionChoice| choice.value == value)
+        {
+            continue;
+        }
+        let label = value.replace(['_', '-'], " ");
+        choices.push(PrintOptionChoice {
+            value: value.to_string(),
+            label,
+        });
+    }
+    Some(choices)
 }
 
 /// Map a validated semantic orientation to its IPP `orientation-requested`
@@ -245,7 +428,7 @@ pub fn orientation_requested(orientation: Option<&str>) -> Option<&'static str> 
 }
 
 /// Build the `lp` argument vector: `-d <printer> [-n <copies>]
-/// [-o media=…] [-o sides=…] [-o orientation-requested=…]
+/// [-o PageSize=…] [-o InputSlot=…] [-o sides=…] [-o orientation-requested=…]
 /// [-o page-ranges=…] <input>`. A single copy omits `-n`; unset options and a
 /// whole-document selection omit their `-o` flags. Grant-resolved input paths
 /// are absolute, so no `--` option terminator is needed. Callers must
@@ -267,7 +450,10 @@ pub fn lp_print_args(
         arguments.push(OsString::from(format!("{key}={value}")));
     };
     if let Some(media) = &options.media {
-        push_option("media", media);
+        push_option("PageSize", media);
+    }
+    if let Some(paper_source) = &options.paper_source {
+        push_option("InputSlot", paper_source);
     }
     if let Some(sides) = &options.sides {
         push_option("sides", sides);
@@ -343,11 +529,53 @@ pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
     ))
 }
 
+/// Query the advertised paper size and input-source choices for one CUPS
+/// destination. Discovery is intentionally separate from printer listing so
+/// the UI only pays for the selected queue. A successful empty result is
+/// default-only; a failed or empty-with-diagnostics `lpoptions` call is an
+/// error so selected values cannot be validated against missing data.
+#[cfg(unix)]
+pub fn printer_capabilities(printer: &str) -> OpResult<PrinterCapabilities> {
+    validate_printer_name(printer)?;
+    let output = path_ops::run_command_with_env_timeout_bounded(
+        Path::new("lpoptions"),
+        &args(&["-p", printer, "-l"]),
+        None,
+        &[],
+        &CUPS_C_LOCALE,
+        std::time::Duration::from_secs(20),
+        MAX_PRINTER_OPTIONS_OUTPUT_BYTES,
+    )?;
+    path_ops::expect_success("lpoptions", &output)?;
+    if output.stdout.is_empty() && !output.stderr.is_empty() {
+        return Err(PathOpError {
+            code: path_ops::ERR_OP_FAILED,
+            message: "CUPS could not read printer paper options".to_string(),
+        });
+    }
+    parse_lpoptions_capabilities(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(windows)]
+pub fn printer_capabilities(printer: &str) -> OpResult<PrinterCapabilities> {
+    validate_printer_name(printer)?;
+    crate::print_windows::printer_capabilities(printer)
+}
+
+#[cfg(not(any(windows, unix)))]
+pub fn printer_capabilities(_printer: &str) -> OpResult<PrinterCapabilities> {
+    Err(PathOpError {
+        code: ERR_PRINT_NOT_SUPPORTED,
+        message: "Printer options are not available on this platform.".to_string(),
+    })
+}
+
 /// Spool one print job to CUPS via `lp` and return its job id for completion
 /// polling and cancellation. CUPS output is forced to the C locale before
 /// parsing its documented English response. If it still cannot provide a
-/// trackable id, fail rather than falsely report completion. Callers must
-/// `validate_print_options(options)` first.
+/// trackable id, fail rather than falsely report completion. Explicit paper
+/// choices are revalidated against this printer immediately before `lp`;
+/// omitted choices preserve the queue's configured defaults without discovery.
 #[cfg(unix)]
 pub fn lp_print(
     input: &Path,
@@ -357,6 +585,11 @@ pub fn lp_print(
     options: &PrintOptions,
 ) -> OpResult<String> {
     validate_copies(copies)?;
+    validate_print_options(options)?;
+    if options.media.is_some() || options.paper_source.is_some() {
+        let capabilities = printer_capabilities(printer)?;
+        validate_options_for_capabilities(options, &capabilities)?;
+    }
     let output = path_ops::run_command_with_env(
         Path::new("lp"),
         &lp_print_args(printer, selection, copies, options, input),
@@ -1420,6 +1653,30 @@ mod tests {
     }
 
     #[test]
+    fn cups_page_ranges_sort_and_merge_overlaps_without_changing_windows_selection() {
+        let segments = [
+            PageSegmentRange { first: 9, last: 9 },
+            PageSegmentRange { first: 3, last: 5 },
+            PageSegmentRange { first: 1, last: 3 },
+            PageSegmentRange { first: 5, last: 6 },
+            PageSegmentRange { first: 9, last: 9 },
+        ];
+        assert_eq!(cups_page_ranges(&segments), "1-6,9");
+        assert_eq!(segments[0], PageSegmentRange { first: 9, last: 9 });
+        assert_eq!(
+            cups_page_ranges(&contiguous_segments(&[2, 0]).unwrap()),
+            "1,3"
+        );
+        assert_eq!(
+            cups_page_ranges(&[PageSegmentRange {
+                first: u32::MAX,
+                last: u32::MAX
+            }]),
+            u32::MAX.to_string()
+        );
+    }
+
+    #[test]
     fn lp_args_whole_document_omit_pages_and_single_copy() {
         assert_eq!(
             lp_print_args(
@@ -1463,6 +1720,7 @@ mod tests {
     fn lp_args_render_media_sides_and_orientation_before_pages() {
         let options = PrintOptions {
             media: Some("Legal".to_string()),
+            paper_source: None,
             sides: Some("two-sided-long-edge".to_string()),
             orientation: Some("landscape".to_string()),
         };
@@ -1473,7 +1731,7 @@ mod tests {
                 "-d",
                 "HP",
                 "-o",
-                "media=Legal",
+                "PageSize=Legal",
                 "-o",
                 "sides=two-sided-long-edge",
                 "-o",
@@ -1498,6 +1756,7 @@ mod tests {
         assert!(validate_print_options(&PrintOptions::default()).is_ok());
         assert!(validate_print_options(&PrintOptions {
             media: Some("Letter".to_string()),
+            paper_source: Some("Tray-1".to_string()),
             sides: Some("one-sided".to_string()),
             orientation: Some("portrait".to_string()),
         })
@@ -1535,6 +1794,285 @@ mod tests {
             parse_lp_job_id("request id is Office_HP-next (1 file(s))"),
             None
         );
+    }
+
+    #[test]
+    fn lpoptions_parser_reads_advertised_sizes_and_sources_and_ignores_defaults() {
+        let capabilities = parse_lpoptions_capabilities(
+            "PageSize/Paper Size: Letter *Legal A4\nInputSlot/Paper Source: *Auto Tray-1 Tray-2\nDuplex/Two-Sided: *None DuplexNoTumble\n",
+        )
+        .unwrap();
+        assert_eq!(
+            capabilities.media,
+            vec![
+                PrintOptionChoice {
+                    value: "Letter".into(),
+                    label: "Letter".into()
+                },
+                PrintOptionChoice {
+                    value: "Legal".into(),
+                    label: "Legal".into()
+                },
+                PrintOptionChoice {
+                    value: "A4".into(),
+                    label: "A4".into()
+                },
+            ]
+        );
+        assert_eq!(
+            capabilities.paper_sources,
+            vec![
+                PrintOptionChoice {
+                    value: "Auto".into(),
+                    label: "Auto".into()
+                },
+                PrintOptionChoice {
+                    value: "Tray-1".into(),
+                    label: "Tray 1".into()
+                },
+                PrintOptionChoice {
+                    value: "Tray-2".into(),
+                    label: "Tray 2".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn lpoptions_parser_handles_unicode_display_labels_with_colons() {
+        let capabilities = parse_lpoptions_capabilities(
+            "PageSize/Taille du papier: Letter A4\nInputSlot/Paper: Source: Auto Tray-2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            capabilities
+                .media
+                .iter()
+                .map(|choice| choice.value.as_str())
+                .collect::<Vec<_>>(),
+            ["Letter", "A4"]
+        );
+        assert_eq!(
+            capabilities
+                .paper_sources
+                .iter()
+                .map(|choice| choice.value.as_str())
+                .collect::<Vec<_>>(),
+            ["Auto", "Tray-2"]
+        );
+    }
+
+    #[test]
+    fn lpoptions_parser_does_not_turn_a_colon_suffix_into_a_choice() {
+        let capabilities =
+            parse_lpoptions_capabilities("InputSlot/Source: *Auto bad:evil\n").unwrap();
+        assert!(capabilities.paper_sources.is_empty());
+    }
+
+    #[test]
+    fn lpoptions_parser_rejects_cups_quote_escape_and_collection_syntax() {
+        for output in [
+            r#"PageSize/Media: "Letter""#,
+            "PageSize/Media: 'Letter'",
+            r"PageSize/Media: Tray\-1",
+            "PageSize/Media: {Letter}",
+        ] {
+            let capabilities = parse_lpoptions_capabilities(output).unwrap();
+            assert!(
+                capabilities.media.is_empty(),
+                "accepted malformed: {output}"
+            );
+        }
+    }
+
+    #[test]
+    fn lpoptions_parser_skips_custom_malformed_and_duplicate_options() {
+        let capabilities = parse_lpoptions_capabilities(
+            "PageSize/Media: Letter Custom Custom.WIDTHxHEIGHT A4 bad=value\nInputSlot/Source: Auto\nInputSlot/Other: Tray-1\nUnrelated/Option: 1 2\n",
+        )
+        .unwrap();
+        assert!(capabilities.media.is_empty());
+        assert!(capabilities.paper_sources.is_empty());
+
+        let capabilities = parse_lpoptions_capabilities(
+            "PageSize/Media: Letter Custom Custom.WIDTHxHEIGHT custom.widthxheight A4 Letter\nPageSize/Other: Legal bad=value\nInputSlot/Source: Auto\nUnrelated/Option: no\n",
+        )
+        .unwrap();
+        // Duplicate option definitions are ambiguous; expose default-only
+        // rather than choosing one driver's potentially conflicting list.
+        assert!(capabilities.media.is_empty());
+        assert_eq!(capabilities.paper_sources.len(), 1);
+    }
+
+    #[test]
+    fn lpoptions_parser_rejects_oversized_captured_output() {
+        let oversized = "x".repeat(MAX_PRINTER_OPTIONS_OUTPUT_BYTES + 1);
+        assert_eq!(
+            parse_lpoptions_capabilities(&oversized).unwrap_err().code,
+            ERR_INVALID_INPUT
+        );
+    }
+
+    #[test]
+    fn printer_capability_validation_requires_exact_membership_and_leaves_defaults_alone() {
+        let capabilities = PrinterCapabilities {
+            media: vec![
+                PrintOptionChoice {
+                    value: "iso_a4_210x297mm".into(),
+                    label: "iso a4 210x297mm".into(),
+                },
+                PrintOptionChoice {
+                    value: "DMPAPER:9".into(),
+                    label: "Custom paper".into(),
+                },
+            ],
+            paper_sources: vec![
+                PrintOptionChoice {
+                    value: "tray-1".into(),
+                    label: "tray 1".into(),
+                },
+                PrintOptionChoice {
+                    value: "DMBIN:3".into(),
+                    label: "Tray 3".into(),
+                },
+            ],
+        };
+        assert!(validate_options_for_capabilities(
+            &PrintOptions::default(),
+            &PrinterCapabilities::default()
+        )
+        .is_ok());
+        assert!(validate_options_for_capabilities(
+            &PrintOptions {
+                media: Some("iso_a4_210x297mm".into()),
+                paper_source: Some("tray-1".into()),
+                ..PrintOptions::default()
+            },
+            &capabilities
+        )
+        .is_ok());
+        assert!(validate_options_for_capabilities(
+            &PrintOptions {
+                media: Some("DMPAPER:9".into()),
+                paper_source: Some("DMBIN:3".into()),
+                ..PrintOptions::default()
+            },
+            &capabilities
+        )
+        .is_ok());
+        assert_eq!(
+            validate_options_for_capabilities(
+                &PrintOptions {
+                    media: Some("Letter".into()),
+                    ..PrintOptions::default()
+                },
+                &capabilities
+            )
+            .unwrap_err()
+            .code,
+            ERR_INVALID_INPUT
+        );
+        assert_eq!(
+            validate_options_for_capabilities(
+                &PrintOptions {
+                    paper_source: Some("tray-2".into()),
+                    ..PrintOptions::default()
+                },
+                &capabilities
+            )
+            .unwrap_err()
+            .code,
+            ERR_INVALID_INPUT
+        );
+        assert!(validate_print_options(&PrintOptions {
+            media: Some("DMPAPER:9".into()),
+            paper_source: Some("DMBIN:3".into()),
+            ..PrintOptions::default()
+        })
+        .is_ok());
+        for invalid in [
+            "",
+            "two words",
+            "has=delimiter",
+            "line\nbreak",
+            "é",
+            &"x".repeat(MAX_PRINTER_OPTION_TOKEN_BYTES + 1),
+        ] {
+            assert_eq!(
+                validate_print_options(&PrintOptions {
+                    media: Some(invalid.to_string()),
+                    ..PrintOptions::default()
+                })
+                .unwrap_err()
+                .code,
+                ERR_INVALID_INPUT
+            );
+        }
+    }
+
+    #[test]
+    fn lp_args_emit_exact_page_size_and_input_slot_and_omit_defaults() {
+        let selection = PrintSelection::Segments(vec![
+            PageSegmentRange { first: 9, last: 9 },
+            PageSegmentRange { first: 2, last: 4 },
+        ]);
+        let options = PrintOptions {
+            media: Some("iso_a4_210x297mm".into()),
+            paper_source: Some("Tray-1".into()),
+            ..PrintOptions::default()
+        };
+        assert_eq!(
+            lp_print_args("Office", &selection, 2, &options, Path::new("/tmp/a.pdf")),
+            os(&[
+                "-d",
+                "Office",
+                "-n",
+                "2",
+                "-o",
+                "PageSize=iso_a4_210x297mm",
+                "-o",
+                "InputSlot=Tray-1",
+                "-o",
+                "page-ranges=2-4,9",
+                "/tmp/a.pdf"
+            ])
+        );
+        assert_eq!(
+            lp_print_args(
+                "Office",
+                &PrintSelection::WholeDocument,
+                1,
+                &PrintOptions::default(),
+                Path::new("/tmp/a.pdf")
+            ),
+            os(&["-d", "Office", "/tmp/a.pdf"])
+        );
+    }
+
+    #[test]
+    fn print_option_json_keeps_camel_case_and_accepts_older_payloads() {
+        let options = PrintOptions {
+            media: Some("A4".into()),
+            paper_source: Some("Tray-1".into()),
+            ..PrintOptions::default()
+        };
+        let value = serde_json::to_value(&options).unwrap();
+        assert_eq!(value["paperSource"], "Tray-1");
+        let old_payload: PrintOptions = serde_json::from_str(
+            r#"{"media":"Letter","sides":"one-sided","orientation":"portrait"}"#,
+        )
+        .unwrap();
+        assert_eq!(old_payload.paper_source, None);
+
+        let capabilities = PrinterCapabilities {
+            media: vec![PrintOptionChoice {
+                value: "A4".into(),
+                label: "A4".into(),
+            }],
+            paper_sources: Vec::new(),
+        };
+        let value = serde_json::to_value(capabilities).unwrap();
+        assert_eq!(value["paperSources"].as_array().unwrap().len(), 0);
     }
 
     #[test]

@@ -619,13 +619,13 @@ jobs:
       # CUPS path the packaged app uses on macOS.
       - name: Set up an ippeveprinter virtual PDF printer
         run: |
-          brew install qpdf
+          brew install qpdf ghostscript
           mkdir -p /tmp/rp-cups-out
-          printf '#!/bin/sh\nlast=""\nfor a in "$@"; do last="$a"; done\ndest="/tmp/rp-cups-out/captured-$$.pdf"\nif [ -f "$last" ]; then cp "$last" "$dest"; else cat > "$dest"; fi\n' > /tmp/rp-capture.sh
-          chmod +x /tmp/rp-capture.sh
-          /usr/bin/ippeveprinter -f application/pdf -c /tmp/rp-capture.sh -p 8631 rp_canary >/tmp/ippeve.log 2>&1 &
+          chmod +x scripts/capture-virtual-print.sh
+          /usr/bin/ippeveprinter -f application/pdf -c "$PWD/scripts/capture-virtual-print.sh" -p 8631 rp_canary >/tmp/ippeve.log 2>&1 &
           sleep 5
           sudo lpadmin -p rp_canary_q -E -v ipp://localhost:8631/ipp/print -m everywhere
+          lpoptions -p rp_canary_q -o media=Letter
           sleep 2
           lpstat -e
 
@@ -634,6 +634,7 @@ jobs:
           RAIOPDF_CUPS_CANARY: "1"
           RAIOPDF_CUPS_PRINTER: rp_canary_q
           RAIOPDF_CUPS_OUTDIR: /tmp/rp-cups-out
+          RAIOPDF_CUPS_CAPTURE_TICKET: "1"
         run: cargo test -p engine-sidecar-core --test print_to_pdf -- --nocapture --test-threads=1
 
       - name: ippeveprinter log on failure

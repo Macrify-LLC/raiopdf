@@ -25,7 +25,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use engine_sidecar_core::print_ops::{
-    contiguous_segments, list_printers, lp_print, PrintOptions, PrintSelection,
+    contiguous_segments, list_printers, lp_print, printer_capabilities, PrintOptions,
+    PrintSelection,
 };
 
 /// A "very long" document, to prove the whole thing prints rather than a
@@ -279,4 +280,124 @@ fn prints_whole_long_document_and_page_range() {
     }
 
     let _ = fs::remove_file(&input);
+}
+
+#[test]
+fn advertised_nondefault_paper_reaches_virtual_printer() {
+    let Some(config) = canary_config() else {
+        return;
+    };
+    let dir = config
+        .out_dir
+        .expect("paper canary needs captured virtual output");
+    let caps = printer_capabilities(&config.printer).expect("native printer capabilities");
+    let choice = caps
+        .media
+        .iter()
+        .find(|choice| choice.value == "Legal")
+        .expect("provisioned virtual queue must advertise Legal");
+    let capture_ticket = std::env::var_os("RAIOPDF_CUPS_CAPTURE_TICKET").is_some();
+    let source = if capture_ticket {
+        caps.paper_sources
+            .iter()
+            .find(|choice| choice.value == "Manual")
+            .map(|choice| choice.value.clone())
+    } else {
+        None
+    };
+    let input = std::env::temp_dir().join(format!("rp-paper-canary-{}.pdf", std::process::id()));
+    fs::write(&input, synthesize_pdf(3)).expect("write synthetic paper fixture");
+    remove_pdfs(&dir);
+    let selection = PrintSelection::Segments(
+        contiguous_segments(&[2, 0]).expect("reversed discontiguous range"),
+    );
+    lp_print(
+        &input,
+        &config.printer,
+        &selection,
+        if capture_ticket { 2 } else { 1 },
+        &PrintOptions {
+            media: Some(choice.value.clone()),
+            paper_source: source.clone(),
+            ..Default::default()
+        },
+    )
+    .expect("explicit advertised Legal paper");
+    let output = await_output_pdf(&dir);
+    let output_pages = pdf_page_count(&output);
+    let text_path = input.with_extension("txt");
+    let text_output = Command::new("gs")
+        .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=txtwrite"])
+        .arg(format!("-sOutputFile={}", text_path.display()))
+        .arg(&output)
+        .output()
+        .expect("read synthetic virtual output text");
+    assert!(text_output.status.success());
+    let text = fs::read_to_string(&text_path).expect("synthetic printed text");
+    assert!(
+        text.find("Page 1 of 3").expect("first selected page")
+            < text.find("Page 3 of 3").expect("last selected page"),
+        "CUPS must retain ascending range semantics: {text}"
+    );
+    if capture_ticket {
+        // An IPP queue may forward the original Letter PDF without filtering;
+        // assert the job ticket rather than mistaking PDF geometry for settings.
+        let ticket_path = output.with_extension("ticket");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ticket_path.exists() && Instant::now() < deadline {
+            sleep(Duration::from_millis(100));
+        }
+        let ticket = fs::read_to_string(&ticket_path).expect("capture IPP job attributes");
+        assert!(
+            ticket.contains("na_legal_8.5x14in")
+                || (ticket.contains("x-dimension=21590") && ticket.contains("y-dimension=35560")),
+            "explicit Legal must reach the job, overriding inherited Letter: {ticket}"
+        );
+        let copies = ticket
+            .lines()
+            .find_map(|line| line.strip_prefix("IPP_COPIES="))
+            .and_then(|value| value.parse::<usize>().ok())
+            .expect("captured IPP copies");
+        // CUPS can forward driver copies or materialize them in the filtered
+        // PDF. Both preserve queue semantics and this job's explicit settings.
+        assert_eq!(
+            output_pages * copies,
+            4,
+            "two selected pages and two copies must reach the virtual job: {ticket}"
+        );
+        if source.is_some() {
+            assert!(
+                ticket.contains("media-source=manual")
+                    || ticket.contains("IPP_MEDIA_SOURCE=manual"),
+                "advertised Manual input slot must reach the IPP job: {ticket}"
+            );
+        } else {
+            eprintln!("virtual queue does not advertise Manual; source forwarding is covered by portable argv fixtures");
+        }
+    } else {
+        assert_eq!(output_pages, 2);
+        // cups-pdf filters output, so actual page geometry also proves the size.
+        let output = Command::new("qpdf")
+            .args(["--json", "--json-key=qpdf"])
+            .arg(&output)
+            .output()
+            .expect("qpdf paper geometry");
+        assert!(output.status.success());
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("qpdf JSON");
+        let objects = json["qpdf"][1].as_object().expect("qpdf objects");
+        assert!(
+            objects.values().any(|object| {
+                let Some(b) = object["value"]["/MediaBox"].as_array() else {
+                    return false;
+                };
+                b.len() == 4
+                    && (b[2].as_f64().unwrap_or(0.) - b[0].as_f64().unwrap_or(0.) - 612.).abs() < 1.
+                    && (b[3].as_f64().unwrap_or(0.) - b[1].as_f64().unwrap_or(0.) - 1008.).abs()
+                        < 1.
+            }),
+            "captured page must use Legal geometry"
+        );
+    }
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&text_path);
 }

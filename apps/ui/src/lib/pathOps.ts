@@ -49,6 +49,8 @@ export type PathOpErrorCode =
   // Native print pipeline (print.rs shares the PathOpError wire shape).
   | "PRINT_NOT_SUPPORTED"
   | "PRINT_CANCELLED"
+  | "PRINT_FAILED"
+  | "PRINT_PARTIAL_CANCELLED"
   | "PRINT_FALLBACK_SELF_HANDLER";
 
 /** Shape of the serialized Rust `PathOpError`. */

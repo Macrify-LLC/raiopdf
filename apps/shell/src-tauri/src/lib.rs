@@ -3193,6 +3193,7 @@ pub fn run() {
             open_source_licenses,
             print::print_status,
             print::print_list_printers,
+            print::print_printer_capabilities,
             print::print_pdf,
             print::print_cancel,
             word::word_capability,

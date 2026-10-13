@@ -21,3 +21,12 @@ in one download.
 Large-document path ops are a separate shell-owned lane. The renderer passes opaque file grants to Tauri commands; Rust resolves grants, runs file-to-file work in private temp directories, verifies outputs, and returns fresh output grants that reopen through the same Save As funnel as normal generated documents. Most path ops use qpdf, Ghostscript, or OCRmyPDF directly. PDF Security also lives in this lane: the Windows shell binds an opaque, one-use save target to snapshots of the source files, sends passwords to qpdf only through stdin, creates an AES-256 candidate, verifies its encryption and permissions, rechecks the sources and destination, and only then publishes the protected copy. Password-bearing inspect, decrypt, and protect requests that cross the authenticated loopback proxy use a bounded binary envelope rather than URLs, headers, logs, or JSON. Combine with Exhibits and streamed in-app annotation saves use the existing MCP one-shot launcher as a Node lane: the shell writes below-threshold exhibit/edit payloads to temp files, passes above-threshold exhibit grants as resolved input paths, passes the streamed main-document path to `--one-shot build_binder` or `--one-shot apply_edits`, sets the Node heap/security policy, enforces the aggregate shell-owned size ceiling before pdf-lib reads the files, verifies the output with qpdf, and only then grants the output.
 
 Stirling-PDF code may be consumed only from MIT-licensed directories. Do not copy, vendor, adapt, or link code from `frontend/editor/src/desktop`, `app/proprietary`, `app/saas`, `engine/`, or any other carved-out or non-MIT area. If a Stirling source path is not clearly covered by the MIT license grant, treat it as unavailable for RaioPDF.
+
+Native printing uses the same grant boundary: the UI sends a grant, printer
+name and job options; shell workers resolve the file and submit locally. The
+`print_printer_capabilities` command returns only driver/queue paper choices,
+and submission revalidates explicit choices. macOS uses CUPS; Windows retains
+the default Ghostscript path and uses job-local GDI settings for paper
+overrides. See [`PRINTING.md`](PRINTING.md) for fitting, fallback and cancellation
+contracts. The bookmark rail shares the navigation panel's bounded height and
+contains scrolling so a long outline does not move the app's document viewport.

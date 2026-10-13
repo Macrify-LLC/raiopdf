@@ -38,6 +38,17 @@ use crate::{
 
 #[cfg(unix)]
 use std::os::unix::{fs::DirBuilderExt, fs::OpenOptionsExt};
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    },
+};
 
 static TEXT_LAYER_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -193,7 +204,7 @@ pub struct PathOpError {
 }
 
 impl PathOpError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -207,23 +218,23 @@ impl PathOpError {
         )
     }
 
-    fn invalid(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self::new(ERR_INVALID_INPUT, message)
     }
 
-    fn failed(message: impl Into<String>) -> Self {
+    pub(crate) fn failed(message: impl Into<String>) -> Self {
         Self::new(ERR_OP_FAILED, message)
     }
 
-    fn cancelled(message: impl Into<String>) -> Self {
+    pub(crate) fn cancelled(message: impl Into<String>) -> Self {
         Self::new(ERR_CANCELLED, message)
     }
 
-    fn timed_out(message: impl Into<String>) -> Self {
+    pub(crate) fn timed_out(message: impl Into<String>) -> Self {
         Self::new(ERR_TIMEOUT, message)
     }
 
-    fn io(context: &str, error: io::Error) -> Self {
+    pub(crate) fn io(context: &str, error: io::Error) -> Self {
         Self::new(ERR_IO, format!("{context}: {error}"))
     }
 }
@@ -663,6 +674,8 @@ fn run_command_cancelable(
         cancel_flag,
         None,
         None,
+        &[],
+        None,
     )
 }
 
@@ -685,7 +698,63 @@ pub(crate) fn run_command_with_timeout(
         None,
         Some(timeout),
         None,
+        &[],
+        None,
     )
+}
+
+/// Run a command with environment overrides, a wall-clock deadline, and a
+/// strict cap on retained stdout/stderr bytes. Both pipes continue to drain
+/// after the cap so the child cannot block; exceeding either cap terminates
+/// the complete child process tree and returns an error.
+#[cfg(unix)]
+pub(crate) fn run_command_with_env_timeout_bounded(
+    program: &Path,
+    args: &[OsString],
+    current_dir: Option<&Path>,
+    prepend_path: &[PathBuf],
+    environment: &[(&str, &str)],
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> OpResult<Output> {
+    run_command_supervised(
+        program,
+        args,
+        current_dir,
+        prepend_path,
+        None,
+        Some(timeout),
+        None,
+        environment,
+        Some(max_output_bytes),
+    )
+}
+
+/// Run Ghostscript with cancellation, a finite deadline, and bounded output.
+/// Printing creates one process per page, so a modest per-process ceiling is
+/// sufficient for diagnostics while avoiding attacker-controlled log growth.
+#[cfg(windows)]
+pub(crate) fn run_ghostscript_print_bounded(
+    toolchain: &PathOpsToolchain,
+    arguments: &[OsString],
+    cancel_flag: &Arc<AtomicBool>,
+) -> OpResult<Output> {
+    const PRINT_GS_TIMEOUT: Duration = Duration::from_secs(120);
+    const PRINT_GS_OUTPUT_LIMIT: usize = 1024 * 1024;
+    let ghostscript = toolchain.require_ghostscript()?;
+    let output = run_command_supervised(
+        ghostscript,
+        arguments,
+        None,
+        &toolchain.path_entries,
+        Some(cancel_flag.clone()),
+        Some(PRINT_GS_TIMEOUT),
+        None,
+        &[],
+        Some(PRINT_GS_OUTPUT_LIMIT),
+    )?;
+    expect_success("ghostscript", &output)?;
+    Ok(output)
 }
 
 /// Run a command with an invocation-scoped stdin payload. This is the only
@@ -706,13 +775,48 @@ fn run_command_with_stdin(
         cancel_flag,
         timeout,
         Some(stdin_bytes),
+        &[],
+        None,
     )
 }
 
+fn drain_tool_output<R: Read + Send + 'static>(
+    mut reader: R,
+    max_output_bytes: Option<usize>,
+    output_exceeded: Arc<AtomicBool>,
+    output_read_failed: Arc<AtomicBool>,
+) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Err(_) => {
+                    output_read_failed.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Ok(read) => {
+                    if let Some(limit) = max_output_bytes {
+                        let retain = limit.saturating_sub(buffer.len()).min(read);
+                        buffer.extend_from_slice(&chunk[..retain]);
+                        if retain < read {
+                            output_exceeded.store(true, Ordering::Relaxed);
+                        }
+                    } else {
+                        buffer.extend_from_slice(&chunk[..read]);
+                    }
+                }
+            }
+        }
+        buffer
+    })
+}
 /// Shared spawn+drain+poll runner behind the cancelable and deadline-bounded
 /// entry points. Cancellation and the deadline both kill the whole child
 /// process tree (qpdf/Ghostscript may have spawned helpers) before returning
 /// a typed error.
+#[allow(clippy::too_many_arguments)]
 fn run_command_supervised(
     program: &Path,
     args: &[OsString],
@@ -721,6 +825,8 @@ fn run_command_supervised(
     cancel_flag: Option<Arc<AtomicBool>>,
     timeout: Option<Duration>,
     stdin_bytes: Option<&[u8]>,
+    environment: &[(&str, &str)],
+    max_output_bytes: Option<usize>,
 ) -> OpResult<Output> {
     let mut command = Command::new(program);
     command
@@ -732,6 +838,7 @@ fn run_command_supervised(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    command.envs(environment.iter().copied());
     if let Some(dir) = current_dir {
         command.current_dir(dir);
     }
@@ -750,6 +857,10 @@ fn run_command_supervised(
     let mut child = command.spawn().map_err(|error| {
         PathOpError::failed(format!("{} spawn failed: {error}", program.display()))
     })?;
+    #[cfg(windows)]
+    let mut child_job = Some(ChildJob::attach(&mut child)?);
+    #[cfg(not(windows))]
+    let mut child_job: Option<()> = None;
     if let Some(stdin_bytes) = stdin_bytes {
         let result = child
             .stdin
@@ -763,27 +874,32 @@ fn run_command_supervised(
         if let Err(error) = result {
             kill_child_tree(&mut child);
             let _ = child.wait();
+            let _ = child_job.take();
             return Err(error);
         }
     }
-    let mut stdout_thread = child.stdout.take().map(|mut stdout| {
-        thread::spawn(move || {
-            let mut buffer = Vec::new();
-            let _ = stdout.read_to_end(&mut buffer);
-            buffer
-        })
+    let output_exceeded = Arc::new(AtomicBool::new(false));
+    let output_read_failed = Arc::new(AtomicBool::new(false));
+    let mut stdout_thread = child.stdout.take().map(|stdout| {
+        drain_tool_output(
+            stdout,
+            max_output_bytes,
+            output_exceeded.clone(),
+            output_read_failed.clone(),
+        )
     });
-    let mut stderr_thread = child.stderr.take().map(|mut stderr| {
-        thread::spawn(move || {
-            let mut buffer = Vec::new();
-            let _ = stderr.read_to_end(&mut buffer);
-            buffer
-        })
+    let mut stderr_thread = child.stderr.take().map(|stderr| {
+        drain_tool_output(
+            stderr,
+            max_output_bytes,
+            output_exceeded.clone(),
+            output_read_failed.clone(),
+        )
     });
-
-    let abort = |child: &mut Child,
-                 stdout_thread: &mut Option<thread::JoinHandle<Vec<u8>>>,
-                 stderr_thread: &mut Option<thread::JoinHandle<Vec<u8>>>| {
+    let mut abort = |child: &mut Child,
+                     stdout_thread: &mut Option<thread::JoinHandle<Vec<u8>>>,
+                     stderr_thread: &mut Option<thread::JoinHandle<Vec<u8>>>| {
+        let _ = child_job.take();
         kill_child_tree(child);
         let _ = child.wait();
         if let Some(handle) = stdout_thread.take() {
@@ -810,11 +926,20 @@ fn run_command_supervised(
                 timeout.unwrap_or_default().as_secs()
             )));
         }
+        if output_exceeded.load(Ordering::Relaxed) {
+            abort(&mut child, &mut stdout_thread, &mut stderr_thread);
+            return Err(PathOpError::failed(format!(
+                "{} exceeded the {} byte captured-output limit and was terminated",
+                program.display(),
+                max_output_bytes.unwrap_or_default()
+            )));
+        }
 
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => thread::sleep(Duration::from_millis(80)),
             Err(error) => {
+                abort(&mut child, &mut stdout_thread, &mut stderr_thread);
                 return Err(PathOpError::failed(format!(
                     "{} wait failed: {error}",
                     program.display()
@@ -822,6 +947,44 @@ fn run_command_supervised(
             }
         }
     };
+
+    // Descendants can keep a pipe open after the parent exits. Completion
+    // includes both output drains, with the same cancellation/deadline budget.
+    loop {
+        let readers_finished = stdout_thread
+            .as_ref()
+            .is_none_or(|handle| handle.is_finished())
+            && stderr_thread
+                .as_ref()
+                .is_none_or(|handle| handle.is_finished());
+        if readers_finished {
+            break;
+        }
+        if cancel_flag
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            abort(&mut child, &mut stdout_thread, &mut stderr_thread);
+            return Err(PathOpError::cancelled("Operation was cancelled."));
+        }
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            abort(&mut child, &mut stdout_thread, &mut stderr_thread);
+            return Err(PathOpError::timed_out(format!(
+                "{} output did not finish within {} seconds and was terminated",
+                program.display(),
+                timeout.unwrap_or_default().as_secs()
+            )));
+        }
+        if output_exceeded.load(Ordering::Relaxed) || output_read_failed.load(Ordering::Relaxed) {
+            abort(&mut child, &mut stdout_thread, &mut stderr_thread);
+            return Err(PathOpError::failed(format!(
+                "{} output exceeded its limit or could not be read completely",
+                program.display()
+            )));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let _ = child_job.take();
 
     let stdout = stdout_thread
         .take()
@@ -831,6 +994,29 @@ fn run_command_supervised(
         .take()
         .and_then(|handle| handle.join().ok())
         .unwrap_or_default();
+    #[cfg(unix)]
+    if !status.success()
+        || output_exceeded.load(Ordering::Relaxed)
+        || output_read_failed.load(Ordering::Relaxed)
+    {
+        // A failed leader can leave descendants that already closed their
+        // pipes. Returning its status must still release the owned group.
+        kill_child_tree(&mut child);
+        let _ = child.wait();
+    }
+    if output_exceeded.load(Ordering::Relaxed) {
+        return Err(PathOpError::failed(format!(
+            "{} exceeded the {} byte captured-output limit",
+            program.display(),
+            max_output_bytes.unwrap_or_default()
+        )));
+    }
+    if output_read_failed.load(Ordering::Relaxed) {
+        return Err(PathOpError::failed(format!(
+            "{} output could not be read completely",
+            program.display()
+        )));
+    }
     Ok(Output {
         status,
         stdout,
@@ -956,6 +1142,53 @@ where
 
 fn kill_child_tree(child: &mut Child) {
     crate::kill_process_tree(child);
+}
+
+#[cfg(windows)]
+struct ChildJob(HANDLE);
+
+#[cfg(windows)]
+impl ChildJob {
+    fn attach(child: &mut Child) -> OpResult<Self> {
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            kill_child_tree(child);
+            let _ = child.wait();
+            return Err(PathOpError::failed(
+                "could not create a bounded child process job",
+            ));
+        }
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let configured = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        let assigned = configured != 0
+            && unsafe { AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) } != 0;
+        if !assigned {
+            unsafe { CloseHandle(handle) };
+            kill_child_tree(child);
+            let _ = child.wait();
+            return Err(PathOpError::failed(
+                "could not supervise the complete child process tree",
+            ));
+        }
+        Ok(Self(handle))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ChildJob {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
 }
 
 fn configure_cancelable_command(command: &mut Command) {
@@ -1108,6 +1341,34 @@ fn run_qpdf(toolchain: &PathOpsToolchain, arguments: Vec<OsString>) -> OpResult<
         .map(|argument| qpdf_compatible_arg(argument))
         .collect::<Vec<_>>();
     let output = run_tool_with_toolchain_timeout(toolchain, qpdf, &arguments)?;
+    expect_success("qpdf", &output)?;
+    Ok(output)
+}
+
+#[cfg(windows)]
+fn run_qpdf_print_bounded(
+    toolchain: &PathOpsToolchain,
+    arguments: &[OsString],
+    cancel_flag: &Arc<AtomicBool>,
+) -> OpResult<Output> {
+    const PRINT_QPDF_TIMEOUT: Duration = Duration::from_secs(120);
+    const PRINT_QPDF_OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
+    let qpdf = toolchain.require_qpdf()?;
+    let arguments = arguments
+        .iter()
+        .map(|argument| qpdf_compatible_arg(argument))
+        .collect::<Vec<_>>();
+    let output = run_command_supervised(
+        qpdf,
+        &arguments,
+        None,
+        &toolchain.path_entries,
+        Some(cancel_flag.clone()),
+        Some(PRINT_QPDF_TIMEOUT),
+        None,
+        &[],
+        Some(PRINT_QPDF_OUTPUT_LIMIT),
+    )?;
     expect_success("qpdf", &output)?;
     Ok(output)
 }
@@ -1312,8 +1573,15 @@ pub struct PageFacts {
     pub index: u32,
     /// Raw MediaBox `[llx, lly, urx, ury]` in PDF points (pre-rotation).
     pub media_box: [f64; 4],
+    /// Strict CropBox/MediaBox intersection, populated only by the Windows
+    /// print probe. Other document operations keep their MediaBox semantics.
+    #[serde(skip)]
+    pub print_box: Option<[f64; 4]>,
     /// Effective /Rotate, normalized to 0/90/180/270.
     pub rotate: i64,
+    /// Page-local /UserUnit multiplier (defaults to 1). Windows raster
+    /// printing currently rejects non-default values before invoking GS.
+    pub user_unit: f64,
     /// "portrait" | "landscape" after applying /Rotate.
     pub orientation: &'static str,
     /// True when the rotated extent is letter portrait (612x792 ± 1 pt).
@@ -1371,6 +1639,28 @@ pub fn document_facts(toolchain: &PathOpsToolchain, input: &Path) -> OpResult<Do
     Ok(facts)
 }
 
+/// Bounded/cancellable page geometry probe for Windows custom printing. This
+/// deliberately skips the optional catalog metadata follow-up because only
+/// page boxes and rotations are needed before rendering.
+#[cfg(windows)]
+pub(crate) fn document_facts_print_bounded(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    cancel_flag: &Arc<AtomicBool>,
+) -> OpResult<DocumentFacts> {
+    let size_bytes = require_input_file(input)?;
+    let mut arguments = args(&[
+        "--warning-exit-0",
+        "--json=latest",
+        "--json-key=pages",
+        "--json-key=qpdf",
+        "--json-key=encrypt",
+    ]);
+    arguments.push(path_arg(input));
+    let output = run_qpdf_print_bounded(toolchain, &arguments, cancel_flag)?;
+    parse_document_facts_for_print(&output.stdout, size_bytes)
+}
+
 /// Probe whether a standalone PDF path has an extractable text layer.
 ///
 /// This intentionally does not use `document_facts`, which is qpdf metadata
@@ -1423,8 +1713,29 @@ const LETTER_WIDTH_PT: f64 = 612.0;
 const LETTER_HEIGHT_PT: f64 = 792.0;
 const LETTER_TOLERANCE_PT: f64 = 1.0;
 const MAX_INHERITANCE_DEPTH: usize = 64;
+// Shared with Windows raster planning so its axis limit and the precision
+// projection below cannot drift independently.
+pub(crate) const MAX_PRINT_RASTER_AXIS_PIXELS: u32 = 100_000;
+const PRINT_BOX_PRECISION_HEADROOM: f64 = 8.0;
+const PRINT_BOX_MAX_PRECISION_ERROR_PIXELS: f64 = 0.5;
 
 pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<DocumentFacts> {
+    parse_document_facts_impl(json, size_bytes, false)
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn parse_document_facts_for_print(
+    json: &[u8],
+    size_bytes: u64,
+) -> OpResult<DocumentFacts> {
+    parse_document_facts_impl(json, size_bytes, true)
+}
+
+fn parse_document_facts_impl(
+    json: &[u8],
+    size_bytes: u64,
+    resolve_print_boxes: bool,
+) -> OpResult<DocumentFacts> {
     let root: serde_json::Value = serde_json::from_slice(json)
         .map_err(|error| PathOpError::failed(format!("qpdf --json parse error: {error}")))?;
 
@@ -1464,9 +1775,28 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
             .ok_or_else(|| PathOpError::failed(format!("page {index} has malformed MediaBox")))?;
 
         let rotate = inherited_attribute(objects, page_ref, "/Rotate")?
-            .and_then(|value| value.as_i64())
-            .unwrap_or(0);
-        let rotate = rotate.rem_euclid(360);
+            .map(|value| {
+                deref(objects, &value)
+                    .as_i64()
+                    .filter(|angle| angle.rem_euclid(90) == 0)
+                    .ok_or_else(|| PathOpError::failed(format!("page {index} has invalid /Rotate")))
+            })
+            .transpose()?
+            .unwrap_or(0)
+            .rem_euclid(360);
+
+        let user_unit = object_value(objects, page_ref)
+            .and_then(|node| node.get("/UserUnit"))
+            .map(|value| {
+                deref(objects, value)
+                    .as_f64()
+                    .filter(|unit| unit.is_finite() && *unit > 0.0 && *unit <= 75_000.0)
+                    .ok_or_else(|| {
+                        PathOpError::failed(format!("page {index} has invalid /UserUnit"))
+                    })
+            })
+            .transpose()?
+            .unwrap_or(1.0);
 
         let width = (media_box[2] - media_box[0]).abs();
         let height = (media_box[3] - media_box[1]).abs();
@@ -1486,7 +1816,13 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
         page_facts.push(PageFacts {
             index: index as u32,
             media_box,
+            print_box: if resolve_print_boxes {
+                Some(print_visible_box(objects, page_ref, media_box, index)?)
+            } else {
+                None
+            },
             rotate,
+            user_unit,
             orientation,
             letter_portrait,
         });
@@ -1664,6 +2000,139 @@ fn deref<'a>(objects: &'a JsonObjectMap, value: &'a serde_json::Value) -> &'a se
     value
 }
 
+fn print_visible_box(
+    objects: &JsonObjectMap,
+    page_ref: &str,
+    media_box: [f64; 4],
+    index: usize,
+) -> OpResult<[f64; 4]> {
+    let valid_rectangle = |rectangle: &[f64; 4]| {
+        rectangle
+            .iter()
+            .all(|value| value.is_finite() && value.abs() < 1.0e9)
+            && rectangle[2] > rectangle[0]
+            && rectangle[3] > rectangle[1]
+    };
+    if !valid_rectangle(&media_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has invalid MediaBox geometry",
+            index + 1
+        )));
+    }
+    let crop_box = match inherited_attribute(objects, page_ref, "/CropBox")? {
+        Some(value) => parse_rectangle(objects, &value).ok_or_else(|| {
+            PathOpError::invalid(format!(
+                "PDF page {} has malformed CropBox geometry",
+                index + 1
+            ))
+        })?,
+        None => media_box,
+    };
+    if !valid_rectangle(&crop_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has invalid CropBox geometry",
+            index + 1
+        )));
+    }
+    // The bundled PDF interpreter and PDF.js both use the intersection for
+    // valid boxes. Strict printing rejects disjoint/empty boxes rather than
+    // silently choosing a different page view for malformed documents.
+    let visible_box = [
+        crop_box[0].max(media_box[0]),
+        crop_box[1].max(media_box[1]),
+        crop_box[2].min(media_box[2]),
+        crop_box[3].min(media_box[3]),
+    ];
+    if !valid_rectangle(&visible_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has no visible CropBox/MediaBox intersection",
+            index + 1
+        )));
+    }
+    if !print_boxes_have_safe_precision(&media_box, &crop_box, &visible_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has unsupported print geometry precision; repair its page boxes before retrying",
+            index + 1
+        )));
+    }
+    Ok(visible_box)
+}
+
+fn print_boxes_have_safe_precision(
+    media_box: &[f64; 4],
+    crop_box: &[f64; 4],
+    visible_box: &[f64; 4],
+) -> bool {
+    [media_box, crop_box, visible_box]
+        .into_iter()
+        .all(print_rectangle_has_safe_precision)
+        && rounded_print_intersection_is_positive(media_box, crop_box)
+}
+
+fn print_rectangle_has_safe_precision(rectangle: &[f64; 4]) -> bool {
+    // Ghostscript's page-box wrapper uses single-real arithmetic. Project a
+    // conservative eight-ULP margin at the largest supported raster axis,
+    // reserving the existing two-pixel budget headroom for raster rounding.
+    (0..2).all(|axis| {
+        let lo = rectangle[axis];
+        let hi = rectangle[axis + 2];
+        let dimension = hi - lo;
+        if !dimension.is_finite() || dimension <= 0.0 {
+            return false;
+        }
+        let lo32 = lo as f32;
+        let hi32 = hi as f32;
+        if !lo32.is_finite() || !hi32.is_finite() || lo32 >= hi32 {
+            return false;
+        }
+        let Some(ulp) = [lo, hi, dimension]
+            .into_iter()
+            .map(binary32_ulp)
+            .try_fold(0.0f64, |largest, spacing| {
+                spacing.map(|spacing| largest.max(spacing))
+            })
+        else {
+            return false;
+        };
+        let error_pixels =
+            PRINT_BOX_PRECISION_HEADROOM * ulp * MAX_PRINT_RASTER_AXIS_PIXELS as f64 / dimension;
+        error_pixels.is_finite() && error_pixels <= PRINT_BOX_MAX_PRECISION_ERROR_PIXELS
+    })
+}
+
+fn rounded_print_intersection_is_positive(media_box: &[f64; 4], crop_box: &[f64; 4]) -> bool {
+    let media = media_box.map(|coordinate| coordinate as f32);
+    let crop = crop_box.map(|coordinate| coordinate as f32);
+    if media
+        .iter()
+        .chain(crop.iter())
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return false;
+    }
+    let left = media[0].max(crop[0]);
+    let bottom = media[1].max(crop[1]);
+    let right = media[2].min(crop[2]);
+    let top = media[3].min(crop[3]);
+    right > left && top > bottom
+}
+
+fn binary32_ulp(value: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let rounded = value as f32;
+    if !rounded.is_finite() {
+        return None;
+    }
+    let below = rounded.next_down();
+    let above = rounded.next_up();
+    let below_spacing = (rounded as f64 - below as f64).abs();
+    let above_spacing = (above as f64 - rounded as f64).abs();
+    let ulp = below_spacing.max(above_spacing);
+    ulp.is_finite().then_some(ulp)
+}
+
 fn is_object_ref(text: &str) -> bool {
     let mut parts = text.split(' ');
     matches!(
@@ -1674,7 +2143,7 @@ fn is_object_ref(text: &str) -> bool {
     )
 }
 
-/// Resolve an inheritable page attribute (`/MediaBox`, `/Rotate`) by walking
+/// Resolve an inheritable page attribute (`/MediaBox`, `/CropBox`, `/Rotate`) by walking
 /// `/Parent` links, with a depth cap to survive malformed cyclic trees.
 fn inherited_attribute(
     objects: &JsonObjectMap,
@@ -4598,6 +5067,411 @@ mod tests {
         assert!(facts.pages[1].letter_portrait);
     }
 
+    fn geometry_probe_fixture(
+        page: serde_json::Value,
+        parent: serde_json::Value,
+        indirect: serde_json::Value,
+    ) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "pages": [{"object":"5 0 R"}],
+            "qpdf": [{}, {
+                "obj:5 0 R": {"value":page},
+                "obj:1 0 R": {"value":parent},
+                "obj:9 0 R": {"value":indirect}
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn print_probe_resolves_crop_inheritance_and_indirection_without_changing_general_facts() {
+        for rotate in [0, 90, 180, 270] {
+            for mode in [
+                "direct",
+                "inherited",
+                "indirect",
+                "indirect-inherited",
+                "indirect-members",
+            ] {
+                let mut page = serde_json::json!({"/Parent":"1 0 R"});
+                let mut parent = serde_json::json!({
+                    "/MediaBox":[37,53,649,845], "/Rotate":rotate
+                });
+                let rectangle = serde_json::json!([137, 153, 549, 745]);
+                match mode {
+                    "direct" => page["/CropBox"] = rectangle.clone(),
+                    "inherited" => parent["/CropBox"] = rectangle.clone(),
+                    "indirect" | "indirect-members" => {
+                        page["/CropBox"] = serde_json::json!("9 0 R")
+                    }
+                    "indirect-inherited" => parent["/CropBox"] = serde_json::json!("9 0 R"),
+                    _ => unreachable!(),
+                }
+                let mut root: serde_json::Value =
+                    serde_json::from_slice(&geometry_probe_fixture(page, parent, rectangle))
+                        .unwrap();
+                if mode == "indirect-members" {
+                    root["qpdf"][1]["obj:9 0 R"]["value"] =
+                        serde_json::json!(["10 0 R", "11 0 R", "12 0 R", "13 0 R"]);
+                    for (object, value) in [(10, 137), (11, 153), (12, 549), (13, 745)] {
+                        root["qpdf"][1][format!("obj:{object} 0 R")] =
+                            serde_json::json!({"value":value});
+                    }
+                }
+                let bytes = serde_json::to_vec(&root).unwrap();
+                let print = parse_document_facts_for_print(&bytes, 1).unwrap();
+                let general = parse_document_facts(&bytes, 1).unwrap();
+                assert_eq!(
+                    print.pages[0].print_box,
+                    Some([137., 153., 549., 745.]),
+                    "{mode}/{rotate}"
+                );
+                assert_eq!(print.pages[0].media_box, [37., 53., 649., 845.]);
+                assert_eq!(print.pages[0].rotate, rotate);
+                assert_eq!(general.pages[0].print_box, None);
+                // Print-only projection cannot alter the public facts wire
+                // shape or MediaBox-based orientation/letter classification.
+                assert_eq!(
+                    serde_json::to_value(&print).unwrap(),
+                    serde_json::to_value(&general).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn print_probe_defaults_cropbox_and_intersects_partial_or_oversized_boxes() {
+        let media = [37., 53., 649., 845.];
+        for (crop, expected) in [
+            (None, media),
+            (Some(serde_json::json!([37, 53, 649, 845])), media),
+            (
+                Some(serde_json::json!([-63, -47, 237, 253])),
+                [37., 53., 237., 253.],
+            ),
+            (Some(serde_json::json!([-63, -47, 700, 900])), media),
+        ] {
+            let mut page = serde_json::json!({"/Parent":"1 0 R"});
+            if let Some(crop) = crop {
+                page["/CropBox"] = crop;
+            }
+            let bytes = geometry_probe_fixture(
+                page,
+                serde_json::json!({"/MediaBox":[37,53,649,845]}),
+                serde_json::json!(null),
+            );
+            assert_eq!(
+                parse_document_facts_for_print(&bytes, 1).unwrap().pages[0].print_box,
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn print_probe_uses_nearest_cropbox_and_rejects_a_later_invalid_page() {
+        let bytes = geometry_probe_fixture(
+            serde_json::json!({"/Parent":"1 0 R", "/CropBox":[137,153,549,745]}),
+            serde_json::json!({"/MediaBox":[37,53,649,845], "/CropBox":[37,53,237,253]}),
+            serde_json::json!(null),
+        );
+        assert_eq!(
+            parse_document_facts_for_print(&bytes, 1).unwrap().pages[0].print_box,
+            Some([137., 153., 549., 745.])
+        );
+
+        let mut root: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        root["pages"] = serde_json::json!([{"object":"5 0 R"}, {"object":"6 0 R"}]);
+        root["qpdf"][1]["obj:6 0 R"] = serde_json::json!({
+            "value":{"/Parent":"1 0 R", "/CropBox":[700,900,800,1000]}
+        });
+        let bytes = serde_json::to_vec(&root).unwrap();
+        let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+        assert!(error.message.contains("page 2"));
+        assert_eq!(parse_document_facts(&bytes, 1).unwrap().pages.len(), 2);
+    }
+
+    #[test]
+    fn print_probe_rejects_invalid_cropboxes_without_rejecting_general_document_facts() {
+        for crop in [
+            serde_json::json!(null),
+            serde_json::json!("invalid"),
+            serde_json::json!([0, 0, 100]),
+            serde_json::json!([0, 0, "Infinity", 100]),
+            serde_json::json!([200, 100, 100, 200]),
+            serde_json::json!([100, 100, 100, 200]),
+            serde_json::json!([700, 900, 800, 1000]),
+            serde_json::json!([649, 53, 700, 845]),
+            serde_json::json!([0, 0, 1.0e9, 100]),
+            serde_json::json!("9 0 R"),
+        ] {
+            let bytes = geometry_probe_fixture(
+                serde_json::json!({"/Parent":"1 0 R", "/CropBox":crop}),
+                serde_json::json!({"/MediaBox":[37,53,649,845]}),
+                serde_json::json!(null),
+            );
+            assert_eq!(
+                parse_document_facts_for_print(&bytes, 1).unwrap_err().code,
+                ERR_INVALID_INPUT
+            );
+            assert!(parse_document_facts(&bytes, 1).is_ok());
+        }
+        for media in [
+            serde_json::json!([100, 0, 0, 100]),
+            serde_json::json!([0, 0, 0, 100]),
+            serde_json::json!([0, 0, 1.0e9, 100]),
+        ] {
+            let bytes = geometry_probe_fixture(
+                serde_json::json!({"/Parent":"1 0 R"}),
+                serde_json::json!({"/MediaBox":media}),
+                serde_json::json!(null),
+            );
+            assert_eq!(
+                parse_document_facts_for_print(&bytes, 1).unwrap_err().code,
+                ERR_INVALID_INPUT
+            );
+        }
+    }
+
+    #[test]
+    fn print_probe_rejects_high_origin_float32_unstable_geometry_before_render() {
+        for (origin, decimal_literals) in [
+            (100_000_000_i64, false),
+            (100_000_000_i64, true),
+            (999_999_000_i64, false),
+            (999_999_000_i64, true),
+        ] {
+            for rotate in [0, 90, 180, 270] {
+                let make_box = |coords: [i64; 4]| {
+                    serde_json::Value::Array(
+                        coords
+                            .into_iter()
+                            .map(|value| {
+                                if decimal_literals {
+                                    serde_json::json!(value as f64)
+                                } else {
+                                    serde_json::json!(value)
+                                }
+                            })
+                            .collect(),
+                    )
+                };
+                let media = make_box([origin, origin, origin + 200, origin + 200]);
+                let crop = make_box([origin + 100, origin + 120, origin + 108, origin + 128]);
+                let bytes = geometry_probe_fixture(
+                    serde_json::json!({"/Parent":"1 0 R", "/CropBox":crop, "/Rotate":rotate}),
+                    serde_json::json!({"/MediaBox":media}),
+                    serde_json::json!(null),
+                );
+                let round_trip: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    round_trip["qpdf"][1]["obj:1 0 R"]["value"]["/MediaBox"][0]
+                        .as_number()
+                        .unwrap()
+                        .is_f64(),
+                    decimal_literals
+                );
+                let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+                assert_eq!(
+                    error.code, ERR_INVALID_INPUT,
+                    "{origin}/{decimal_literals}/Rotate={rotate}"
+                );
+                assert!(error
+                    .message
+                    .contains("unsupported print geometry precision"));
+                assert!(error
+                    .message
+                    .contains("repair its page boxes before retrying"));
+                // This guard is deliberately print-only; generic document facts
+                // retain their historical MediaBox behavior.
+                assert!(parse_document_facts(&bytes, 1).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn print_probe_rejects_unstable_raw_boxes_even_when_the_intersection_is_stable() {
+        for (media, crop) in [
+            ([900, 0, 1023, 792], [900, 0, 1050, 792]),
+            ([900, 0, 1050, 792], [900, 0, 1023, 792]),
+        ] {
+            let bytes = geometry_probe_fixture(
+                serde_json::json!({"/Parent":"1 0 R", "/CropBox":crop}),
+                serde_json::json!({"/MediaBox":media}),
+                serde_json::json!(null),
+            );
+            let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+            assert_eq!(error.code, ERR_INVALID_INPUT);
+            assert!(error
+                .message
+                .contains("unsupported print geometry precision"));
+            // The generic facts parser intentionally remains independent of this print-only guard.
+            assert!(parse_document_facts(&bytes, 1).is_ok());
+        }
+    }
+
+    #[test]
+    fn print_probe_accepts_ordinary_decimal_a4_and_crop_boxes() {
+        let bytes = geometry_probe_fixture(
+            serde_json::json!({"/Parent":"1 0 R", "/CropBox":[0.2, 0.3, 594.9, 842.0]}),
+            serde_json::json!({"/MediaBox":[0.1, 0.2, 595.1, 842.2]}),
+            serde_json::json!(null),
+        );
+        assert_eq!(
+            parse_document_facts_for_print(&bytes, 1).unwrap().pages[0].print_box,
+            Some([0.2, 0.3, 594.9, 842.0])
+        );
+    }
+
+    #[test]
+    fn binary32_ulp_handles_powers_of_two_negative_zero_and_subnormals() {
+        assert_eq!(binary32_ulp(1.0), Some(2.0f64.powi(-23)));
+        assert_eq!(binary32_ulp(-1.0), Some(2.0f64.powi(-23)));
+        assert_eq!(binary32_ulp(2.0), Some(2.0f64.powi(-22)));
+        assert_eq!(binary32_ulp(-2.0), Some(2.0f64.powi(-22)));
+        assert_eq!(binary32_ulp(0.0), Some(2.0f64.powi(-149)));
+        assert_eq!(binary32_ulp(-0.0), Some(2.0f64.powi(-149)));
+        let smallest_subnormal = f32::from_bits(1) as f64;
+        assert_eq!(binary32_ulp(smallest_subnormal), Some(smallest_subnormal));
+        assert_eq!(binary32_ulp(-smallest_subnormal), Some(smallest_subnormal));
+        assert_eq!(binary32_ulp(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn print_precision_gate_obeys_its_half_pixel_boundary_and_negative_ranges() {
+        let at_boundary = [1024.0, -1219.3125, 1219.3125, -1024.0];
+        assert!(print_rectangle_has_safe_precision(&at_boundary));
+        let just_over = [1024.0, -1219.25, 1219.25, -1024.0];
+        assert!(!print_rectangle_has_safe_precision(&just_over));
+        let collapsed = [100_000_000.0, 0.0, 100_000_001.0, 100.0];
+        assert!(!print_rectangle_has_safe_precision(&collapsed));
+        let underflowed = [0.0, 0.0, f64::from_bits(1), 1.0];
+        assert!(!print_rectangle_has_safe_precision(&underflowed));
+    }
+
+    #[test]
+    fn print_probe_rejects_precision_unsafe_later_page() {
+        let bytes = geometry_probe_fixture(
+            serde_json::json!({"/Parent":"1 0 R", "/CropBox":[0.2,0.3,594.9,842.0]}),
+            serde_json::json!({"/MediaBox":[0.1,0.2,595.1,842.2]}),
+            serde_json::json!(null),
+        );
+        let mut root: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        root["pages"] = serde_json::json!([{"object":"5 0 R"}, {"object":"6 0 R"}]);
+        root["qpdf"][1]["obj:6 0 R"] = serde_json::json!({
+            "value":{
+                "/Parent":"1 0 R",
+                "/MediaBox":[100000000.0,100000000.0,100000200.0,100000200.0],
+                "/CropBox":[100000100.0,100000120.0,100000108.0,100000128.0]
+            }
+        });
+        let bytes = serde_json::to_vec(&root).unwrap();
+        let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+        assert!(error.message.contains("page 2"));
+        assert!(parse_document_facts(&bytes, 1).is_ok());
+    }
+
+    #[test]
+    fn geometry_probe_resolves_inherited_rotation_but_page_local_units() {
+        let parent =
+            serde_json::json!({"/MediaBox":[37,53,649,845],"/Rotate":"9 0 R","/UserUnit":4});
+        let page = serde_json::json!({"/Parent":"1 0 R"});
+        let facts = parse_document_facts(
+            &geometry_probe_fixture(page.clone(), parent.clone(), serde_json::json!(90)),
+            1,
+        )
+        .unwrap();
+        assert_eq!(facts.pages[0].media_box, [37., 53., 649., 845.]);
+        assert_eq!(facts.pages[0].rotate, 90);
+        assert_eq!(facts.pages[0].user_unit, 1., "UserUnit is not inherited");
+        let mut unit_parent = parent;
+        unit_parent["/Rotate"] = serde_json::json!(90);
+        for unit in [serde_json::json!(2), serde_json::json!("9 0 R")] {
+            let mut direct = page.clone();
+            direct["/UserUnit"] = unit;
+            let facts = parse_document_facts(
+                &geometry_probe_fixture(direct, unit_parent.clone(), serde_json::json!(2)),
+                1,
+            )
+            .unwrap();
+            assert_eq!(facts.pages[0].user_unit, 2.);
+        }
+    }
+
+    #[test]
+    fn geometry_probe_rejects_malformed_rotation_and_units() {
+        let parent = serde_json::json!({"/MediaBox":[0,0,612,792]});
+        for value in [
+            serde_json::json!(90.5),
+            serde_json::json!("sideways"),
+            serde_json::json!(null),
+        ] {
+            let page = serde_json::json!({"/Parent":"1 0 R","/Rotate":value});
+            assert!(parse_document_facts(
+                &geometry_probe_fixture(page, parent.clone(), serde_json::json!(0)),
+                1
+            )
+            .is_err());
+        }
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!("invalid"),
+            serde_json::json!("9 0 R"),
+        ] {
+            let page = serde_json::json!({"/Parent":"1 0 R","/UserUnit":value});
+            assert!(parse_document_facts(
+                &geometry_probe_fixture(page, parent.clone(), serde_json::json!(null)),
+                1
+            )
+            .is_err());
+        }
+        let page = serde_json::json!({"/Parent":"1 0 R","/Rotate":"9 0 R"});
+        assert!(parse_document_facts(
+            &geometry_probe_fixture(page, parent, serde_json::json!(45.5)),
+            1
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervised_failure_terminates_descendants_that_closed_output() {
+        let dir = TestDir::new("failed-tool-descendant");
+        let pid_file = dir.path().join("child.pid");
+        let script = "(trap '' TERM; exec sleep 30) </dev/null >/dev/null 2>&1 & echo $! > \"$1\"; sleep 0.2; exit 7";
+        let arguments = vec![
+            OsString::from("-c"),
+            OsString::from(script),
+            OsString::from("tool-test"),
+            path_arg(&pid_file),
+        ];
+        let output = run_command_supervised(
+            Path::new("sh"),
+            &arguments,
+            None,
+            &[],
+            None,
+            Some(Duration::from_secs(2)),
+            None,
+            &[],
+            Some(4096),
+        )
+        .unwrap();
+        assert!(!output.status.success());
+        let pid = fs::read_to_string(pid_file).unwrap();
+        let status = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid.trim()])
+            .output()
+            .unwrap();
+        let state = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            state.trim().is_empty() || state.trim().starts_with('Z'),
+            "descendant still runs: {state}"
+        );
+    }
+
     #[test]
     fn parses_signature_facts_from_document_json() {
         let json = br#"{
@@ -5604,7 +6478,9 @@ mod tests {
             .map(|index| PageFacts {
                 index,
                 media_box: [0.0, 0.0, 612.0, 792.0],
+                print_box: None,
                 rotate: 0,
+                user_unit: 1.0,
                 orientation: "portrait",
                 letter_portrait: true,
             })
@@ -5802,7 +6678,9 @@ mod tests {
         let page = PageFacts {
             index: 0,
             media_box: [0.0, 0.0, 612.0, 792.0],
+            print_box: None,
             rotate: 90,
+            user_unit: 1.0,
             orientation: "portrait",
             letter_portrait: false,
         };
@@ -5921,6 +6799,99 @@ mod tests {
                 .unwrap();
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("ok"));
+    }
+
+    #[test]
+    fn supervised_output_limit_rejects_a_fast_verbose_child() {
+        #[cfg(windows)]
+        let (program, arguments) = (
+            Path::new("powershell.exe"),
+            args(&[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::Out.Write(('x' * 65536))",
+            ]),
+        );
+        #[cfg(not(windows))]
+        let (program, arguments) = (Path::new("sh"), args(&["-c", "head -c 65536 /dev/zero"]));
+        let error = run_command_supervised(
+            program,
+            &arguments,
+            None,
+            &[],
+            None,
+            Some(Duration::from_secs(5)),
+            None,
+            &[],
+            Some(1024),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ERR_OP_FAILED);
+        assert!(error.message.contains("limit"));
+    }
+
+    #[cfg(windows)]
+    fn retained_pipe_command() -> (&'static Path, Vec<OsString>) {
+        // The parent deliberately exits after its child inherits the output
+        // pipe; both are owned by this invocation's kill-on-close job.
+        (Path::new("powershell.exe"), args(&["-NoProfile", "-NonInteractive", "-Command",
+            "Start-Sleep -Milliseconds 200; $p = New-Object System.Diagnostics.ProcessStartInfo; $p.FileName = 'powershell.exe'; $p.Arguments = '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 30'; $p.UseShellExecute = $false; $p.CreateNoWindow = $true; [void][System.Diagnostics.Process]::Start($p)"
+        ]))
+    }
+
+    #[cfg(not(windows))]
+    fn retained_pipe_command() -> (&'static Path, Vec<OsString>) {
+        (
+            Path::new("sh"),
+            args(&["-c", "(trap '' TERM; sleep 30) & sleep 0.2; exit 0"]),
+        )
+    }
+
+    #[test]
+    fn supervised_deadline_includes_descendant_output_drain() {
+        let (program, arguments) = retained_pipe_command();
+        let started = Instant::now();
+        let error = run_command_supervised(
+            program,
+            &arguments,
+            None,
+            &[],
+            None,
+            Some(Duration::from_secs(2)),
+            None,
+            &[],
+            Some(4096),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ERR_TIMEOUT);
+        assert!(started.elapsed() < Duration::from_secs(8));
+    }
+
+    #[test]
+    fn supervised_cancel_includes_descendant_output_drain() {
+        let (program, arguments) = retained_pipe_command();
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancel = flag.clone();
+        let trigger = thread::spawn(move || {
+            thread::sleep(Duration::from_secs(2));
+            cancel.store(true, Ordering::Relaxed);
+        });
+        let started = Instant::now();
+        let result = run_command_supervised(
+            program,
+            &arguments,
+            None,
+            &[],
+            Some(flag),
+            Some(Duration::from_secs(10)),
+            None,
+            &[],
+            Some(4096),
+        );
+        trigger.join().unwrap();
+        assert_eq!(result.unwrap_err().code, ERR_CANCELLED);
+        assert!(started.elapsed() < Duration::from_secs(8));
     }
 
     #[cfg(windows)]

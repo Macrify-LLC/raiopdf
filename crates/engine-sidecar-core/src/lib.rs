@@ -1,6 +1,8 @@
 pub mod docx_scan;
 pub mod path_ops;
 pub mod print_ops;
+#[cfg(windows)]
+pub mod print_windows;
 pub mod runtime;
 pub mod word_ops;
 
@@ -1468,10 +1470,10 @@ pub fn kill_process_tree(child: &mut Child) {
     // `configure_child_process`; a negative pid targets that complete group.
     let _ = unsafe { libc::kill(process_group, libc::SIGTERM) };
     thread::sleep(Duration::from_millis(250));
-    if child.try_wait().ok().flatten().is_none() {
-        // SAFETY: same process-group invariant as the SIGTERM call above.
-        let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
-    }
+    // The leader may already have exited while descendants retain pipes or
+    // ignore SIGTERM. Terminate the owned group regardless of leader state.
+    // SAFETY: same process-group invariant as the SIGTERM call above.
+    let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
     let _ = child.kill();
 }
 

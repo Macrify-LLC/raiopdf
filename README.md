@@ -67,7 +67,7 @@ Four ways it fits into an actual day at the firm:
 
 | Capability | What it means |
 |---|---|
-| View, search, print | Standard reading and navigation, full-document search, keyboard and Ctrl+wheel zoom |
+| View, search, print | Standard reading and navigation, full-document search, keyboard and Ctrl+wheel zoom. The desktop print dialog offers the selected printer's paper sizes and paper sources; see [printing](docs/PRINTING.md). |
 | Organize pages | Merge, split, reorder, extract, insert, insert a slip sheet anywhere, rotate, crop, repair |
 | **Make Searchable** | Fully offline OCR for scanned documents |
 | **Honest text layers** | The status bar tells you whether a document's text is verified searchable, missing, or garbled — and "Fix garbled text" rebuilds a bad text layer offline, refusing to claim success it can't verify |

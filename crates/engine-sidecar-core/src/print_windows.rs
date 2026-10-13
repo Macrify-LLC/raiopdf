@@ -190,9 +190,6 @@ fn query_capabilities(printer: &str) -> OpResult<(Vec<PaperCapability>, Vec<Prin
 }
 
 fn capability_query_flags(fields: u32) -> (bool, bool) {
-    if fields & DM_COPIES == 0 {
-        return (false, false);
-    }
     (fields & DM_PAPERSIZE != 0, fields & DM_DEFAULTSOURCE != 0)
 }
 
@@ -353,11 +350,6 @@ fn print_with_options_output(
     let default_mode = default_devmode(printer_handle.0, printer)?;
     let port_name = printer_port(printer_handle.0)?;
     let fields = capability_fields(printer, port_name.as_ptr(), default_mode.devmode_ptr())?;
-    if fields & DM_COPIES == 0 {
-        return Err(PathOpError::invalid(
-            "printer does not support safe single-copy per-job printing",
-        ));
-    }
     if paper.is_some() && fields & DM_PAPERSIZE == 0 {
         return Err(PathOpError::invalid(
             "printer does not support per-job paper size selection",
@@ -383,7 +375,13 @@ fn print_with_options_output(
         .map_err(translate_path_cancel)?;
     let pages = selected_pages(selection, &facts.pages, facts.page_count)?;
 
-    let mode = configured_devmode(printer_handle.0, printer, paper.as_ref(), source_id)?;
+    let mode = configured_devmode(
+        printer_handle.0,
+        printer,
+        paper.as_ref(),
+        source_id,
+        fields & DM_COPIES != 0,
+    )?;
     let dc = DeviceContext::create(printer, mode.devmode_ptr())?;
     if let Some(paper) = paper.as_ref() {
         validate_device_paper_size(dc.0, paper)?;
@@ -944,6 +942,7 @@ fn configured_devmode(
     printer: &str,
     paper: Option<&PaperCapability>,
     source_id: Option<u16>,
+    copies_supported: bool,
 ) -> OpResult<DevModeBuffer> {
     let name = wide(printer);
     let default = default_devmode(handle, printer)?;
@@ -952,7 +951,14 @@ fn configured_devmode(
         storage: default.clone_bytes(),
         byte_len: default.byte_len,
     };
-    unsafe { apply_devmode_selection(&mut *input.devmode_mut_ptr(), paper, source_id) };
+    unsafe {
+        apply_devmode_selection(
+            &mut *input.devmode_mut_ptr(),
+            paper,
+            source_id,
+            copies_supported,
+        )
+    };
     let mut output = DevModeBuffer::new(default.byte_len)?;
     if unsafe {
         DocumentPropertiesW(
@@ -973,7 +979,7 @@ fn configured_devmode(
     unsafe {
         let mode = &*output.devmode_ptr();
         let public = mode.Anonymous1.Anonymous1;
-        if mode.dmFields & DM_COPIES == 0 || public.dmCopies != 1 {
+        if !normalized_single_copy_is_valid(mode.dmFields, public.dmCopies, copies_supported) {
             return Err(settings_rejected(
                 "printer did not preserve the single-copy per-job mode",
             ));
@@ -1017,9 +1023,14 @@ fn apply_devmode_selection(
     mode: &mut DEVMODEW,
     paper: Option<&PaperCapability>,
     source_id: Option<u16>,
+    copies_supported: bool,
 ) {
-    mode.dmFields |= DM_COPIES;
-    mode.Anonymous1.Anonymous1.dmCopies = 1;
+    if copies_supported {
+        mode.dmFields |= DM_COPIES;
+        mode.Anonymous1.Anonymous1.dmCopies = 1;
+    } else {
+        mode.dmFields &= !DM_COPIES;
+    }
     if let Some(paper) = paper {
         mode.dmFields |= DM_PAPERSIZE;
         mode.Anonymous1.Anonymous1.dmPaperSize = paper.id as i16;
@@ -1041,6 +1052,14 @@ fn apply_devmode_selection(
     if let Some(source_id) = source_id {
         mode.dmFields |= DM_DEFAULTSOURCE;
         mode.Anonymous1.Anonymous1.dmDefaultSource = source_id as i16;
+    }
+}
+
+fn normalized_single_copy_is_valid(fields: u32, copies: i16, copies_supported: bool) -> bool {
+    if fields & DM_COPIES != 0 {
+        copies == 1
+    } else {
+        !copies_supported
     }
 }
 
@@ -2262,13 +2281,11 @@ mod tests {
     #[test]
     fn printer_capability_filter_honors_supported_fields_and_custom_form_requirements() {
         assert_eq!(capability_query_flags(DM_COPIES), (false, false));
+        assert_eq!(capability_query_flags(DM_PAPERSIZE), (true, false));
+        assert_eq!(capability_query_flags(DM_DEFAULTSOURCE), (false, true));
         assert_eq!(
-            capability_query_flags(DM_COPIES | DM_PAPERSIZE),
-            (true, false)
-        );
-        assert_eq!(
-            capability_query_flags(DM_COPIES | DM_DEFAULTSOURCE),
-            (false, true)
+            capability_query_flags(DM_PAPERSIZE | DM_DEFAULTSOURCE),
+            (true, true)
         );
 
         let ids = [9, DMPAPER_USER as u16];
@@ -2297,6 +2314,21 @@ mod tests {
         assert!(filter_media_capabilities(0, &ids, &sizes, &names)
             .unwrap()
             .is_empty());
+
+        // Paper/source choices remain discoverable when the driver does not
+        // advertise DM_COPIES; copy handling is configured per job separately.
+        let (query_media, query_sources) = capability_query_flags(DM_PAPERSIZE | DM_DEFAULTSOURCE);
+        assert!(query_media && query_sources);
+        assert_eq!(
+            filter_media_capabilities(DM_PAPERSIZE, &ids[..1], &sizes[..1], &names[..1])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            filter_source_capabilities(&[1], &["Tray 1".to_string()]).unwrap()[0].value,
+            "DMBIN:1"
+        );
     }
 
     #[test]
@@ -2557,7 +2589,7 @@ mod tests {
                 label: "Letter".to_string(),
             },
         };
-        apply_devmode_selection(&mut mode, Some(&paper), Some(3));
+        apply_devmode_selection(&mut mode, Some(&paper), Some(3), true);
         assert_eq!(
             mode.dmFields & (DM_PAPERWIDTH | DM_PAPERLENGTH | DM_FORMNAME),
             0
@@ -2570,6 +2602,55 @@ mod tests {
             assert_eq!(mode.Anonymous1.Anonymous1.dmDefaultSource, 3);
         }
         unsafe { assert_eq!(mode.Anonymous1.Anonymous1.dmOrientation, 2) };
+    }
+
+    #[test]
+    fn driver_copy_normalization_accepts_only_consistent_active_values() {
+        assert!(normalized_single_copy_is_valid(DM_COPIES, 1, true));
+        assert!(!normalized_single_copy_is_valid(0, 1, true));
+        assert!(!normalized_single_copy_is_valid(DM_COPIES, 0, true));
+        assert!(!normalized_single_copy_is_valid(DM_COPIES, 2, true));
+
+        assert!(normalized_single_copy_is_valid(0, 0, false));
+        assert!(normalized_single_copy_is_valid(0, 2, false));
+        assert!(normalized_single_copy_is_valid(DM_COPIES, 1, false));
+        assert!(!normalized_single_copy_is_valid(DM_COPIES, 0, false));
+        assert!(!normalized_single_copy_is_valid(DM_COPIES, 2, false));
+    }
+
+    #[test]
+    fn input_devmode_omits_unsupported_driver_copy_field() {
+        let mut supported = DEVMODEW::default();
+        supported.Anonymous1.Anonymous1.dmCopies = 2;
+        apply_devmode_selection(&mut supported, None, None, true);
+        assert_ne!(supported.dmFields & DM_COPIES, 0);
+        unsafe { assert_eq!(supported.Anonymous1.Anonymous1.dmCopies, 1) };
+
+        for inactive_value in [0, 2] {
+            let mut unsupported = DEVMODEW {
+                dmFields: DM_COPIES,
+                ..Default::default()
+            };
+            unsupported.Anonymous1.Anonymous1.dmCopies = inactive_value;
+            apply_devmode_selection(&mut unsupported, None, None, false);
+            assert_eq!(unsupported.dmFields & DM_COPIES, 0);
+        }
+    }
+
+    #[test]
+    fn copy_count_jobs_keep_one_full_lifecycle_per_application_copy() {
+        let (mut starter, state) = mock_job(None);
+        let cancel = starter.cancel.clone();
+        let result = execute_copies(3, &cancel, |_| {
+            run_mock_copy(&mut starter, &[selected_page(72.0, 72.0)], &cancel, false)
+        });
+        assert_eq!(result.unwrap(), 3);
+        let state = state.lock().unwrap();
+        assert_eq!(state.starts, 3);
+        assert_eq!(state.page_starts, 3);
+        assert_eq!(state.page_ends, 3);
+        assert_eq!(state.finishes, 3);
+        assert_eq!(state.aborts, 0);
     }
 
     #[test]
@@ -2603,7 +2684,7 @@ mod tests {
         };
         let mode = unsafe { &mut *buffer.devmode_mut_ptr() };
         mode.dmSize = standard_size as u16;
-        apply_devmode_selection(mode, Some(&paper), Some(4));
+        apply_devmode_selection(mode, Some(&paper), Some(4), true);
         assert_ne!(
             mode.dmFields & (DM_PAPERWIDTH | DM_PAPERLENGTH | DM_FORMNAME),
             0
@@ -2672,7 +2753,17 @@ mod tests {
         let paper = selected_paper(Some(&media), &media_capabilities, &caps)
             .unwrap()
             .unwrap();
-        let mode = configured_devmode(printer_handle.0, &printer, Some(&paper), None).unwrap();
+        let port = printer_port(printer_handle.0).unwrap();
+        let default = default_devmode(printer_handle.0, &printer).unwrap();
+        let fields = capability_fields(&printer, port.as_ptr(), default.devmode_ptr()).unwrap();
+        let mode = configured_devmode(
+            printer_handle.0,
+            &printer,
+            Some(&paper),
+            None,
+            fields & DM_COPIES != 0,
+        )
+        .unwrap();
         let dc = DeviceContext::create(&printer, mode.devmode_ptr()).unwrap();
         let physical_width = unsafe { GetDeviceCaps(dc.0, PHYSICALWIDTH as i32) };
         let physical_height = unsafe { GetDeviceCaps(dc.0, PHYSICALHEIGHT as i32) };

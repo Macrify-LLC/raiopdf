@@ -52,6 +52,45 @@ const ORIENTATIONS: readonly PrintOptionChoice[] = [
   { value: "landscape", label: "Landscape" },
 ];
 
+function isCurrentCapabilityRequest(
+  printer: string,
+  selectedPrinter: string,
+  request: CapabilityRequest,
+  currentGeneration: number,
+  renderedGeneration: number,
+): boolean {
+  return Boolean(printer)
+    && selectedPrinter === printer
+    && request.printer === printer
+    && request.generation === currentGeneration
+    && request.generation === renderedGeneration;
+}
+
+function selectedPaperOptionsAreReady(
+  request: CapabilityRequest,
+  media: string,
+  paperSource: string,
+): boolean {
+  if (!media && !paperSource) {
+    return true;
+  }
+  if (request.state !== "ready" || !request.capabilities) {
+    return false;
+  }
+  return (!media || request.capabilities.media.some((choice) => choice.value === media))
+    && (!paperSource || request.capabilities.paperSources.some((choice) => choice.value === paperSource));
+}
+
+function paperOptionSubmissionMessage(request: CapabilityRequest): string {
+  if (request.state === "loading") {
+    return "Wait for this printer's paper options to finish loading before choosing a paper size or source.";
+  }
+  if (request.state === "error") {
+    return "Printer options could not be verified. Use the printer defaults or choose another printer.";
+  }
+  return "Choose a paper size or source advertised for this printer.";
+}
+
 /** A labeled dropdown for one printer-advertised paper or semantic option. */
 function OptionSelect({
   id,
@@ -263,13 +302,18 @@ export function PrintDialog({
     }
 
     const request = activeCapabilityRequest.current;
-    if (
-      selectedPrinter.current !== printerName
-      || request.printer !== printerName
-      || request.generation !== capabilityGeneration.current
-      || request.state === "loading"
-    ) {
+    if (!isCurrentCapabilityRequest(
+      printerName,
+      selectedPrinter.current,
+      request,
+      capabilityGeneration.current,
+      capabilityRequest.generation,
+    )) {
       setMessage("Wait for this printer's options to finish loading.");
+      return;
+    }
+    if (!selectedPaperOptionsAreReady(request, paperSize, paperSource)) {
+      setMessage(paperOptionSubmissionMessage(request));
       return;
     }
 
@@ -292,6 +336,7 @@ export function PrintDialog({
   }, [
     copiesInput,
     close,
+    capabilityRequest.generation,
     duplex,
     onStartPrint,
     orientation,
@@ -308,8 +353,16 @@ export function PrintDialog({
     capabilityGeneration.current += 1;
   }, []);
 
-  const capabilityRequestIsCurrent = capabilityRequest.printer === printerName
-    && capabilityRequest.generation === capabilityGeneration.current;
+  const activeRequestForRender = activeCapabilityRequest.current;
+  const capabilityRequestIsCurrent = isCurrentCapabilityRequest(
+    printerName,
+    selectedPrinter.current,
+    activeRequestForRender,
+    capabilityGeneration.current,
+    capabilityRequest.generation,
+  );
+  const canSubmit = capabilityRequestIsCurrent
+    && selectedPaperOptionsAreReady(activeRequestForRender, paperSize, paperSource);
   const paperCapabilities = capabilityRequestIsCurrent
     ? capabilityRequest.capabilities
     : null;
@@ -462,7 +515,7 @@ export function PrintDialog({
                 {message}
               </p>
             ) : null}
-            <button type="submit" className="tool-panel__primary-button">
+            <button type="submit" className="tool-panel__primary-button" disabled={!canSubmit}>
               Print
             </button>
             <button

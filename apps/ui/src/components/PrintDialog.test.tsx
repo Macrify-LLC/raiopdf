@@ -105,6 +105,15 @@ async function changeSelect(id: string, value: string): Promise<void> {
   });
 }
 
+async function chooseUnavailableOption(id: string, value: string): Promise<void> {
+  await act(async () => {
+    const element = select(id);
+    element.add(new Option("Programmatic option", value));
+    element.value = value;
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
 async function submitForm(): Promise<void> {
   await act(async () => {
     const form = container?.querySelector("form");
@@ -113,6 +122,18 @@ async function submitForm(): Promise<void> {
     }
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
+}
+
+function captureSubmitHandler(): (event: { preventDefault: () => void }) => void {
+  const form = container?.querySelector("form");
+  const propsKey = form && Object.keys(form).find((key) => key.startsWith("__reactProps$"));
+  const props = propsKey && form
+    ? (form as unknown as Record<string, { onSubmit?: unknown }>)[propsKey]
+    : undefined;
+  if (typeof props?.onSubmit !== "function") {
+    throw new Error("Missing React submit handler");
+  }
+  return props.onSubmit as (event: { preventDefault: () => void }) => void;
 }
 
 function optionValues(id: string): string[] {
@@ -148,6 +169,33 @@ afterEach(() => {
 });
 
 describe("PrintDialog printer capabilities", () => {
+  it("allows printer-default settings while the initial capability request is pending", async () => {
+    await mountDialog();
+    expect(requests).toHaveLength(1);
+    expect(select("print-dialog-paper").value).toBe("");
+    expect(select("print-dialog-paper-source").value).toBe("");
+    expect(container?.querySelector<HTMLButtonElement>("button[type='submit']")?.disabled).toBe(false);
+
+    await submitForm();
+    expect(onStartPrint).toHaveBeenCalledWith(expect.objectContaining({
+      printer: "Printer A",
+      options: {},
+    }));
+  });
+
+  it("allows macOS sides and orientation while paper discovery is pending", async () => {
+    mocks.platform = "macos";
+    await mountDialog();
+    await changeSelect("print-dialog-duplex", "two-sided-long-edge");
+    await changeSelect("print-dialog-orientation", "landscape");
+
+    await submitForm();
+    expect(onStartPrint).toHaveBeenCalledWith(expect.objectContaining({
+      printer: "Printer A",
+      options: { sides: "two-sided-long-edge", orientation: "landscape" },
+    }));
+  });
+
   it("shows only advertised Windows paper choices and submits the selected media and source", async () => {
     await mountDialog();
     expect(requests.map((request) => request.printer)).toEqual(["Printer A"]);
@@ -173,7 +221,7 @@ describe("PrintDialog printer capabilities", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("clears old choices on selection and refuses submit while the new printer is loading", async () => {
+  it("clears old choices and permits printer defaults for a newly selected printer while loading", async () => {
     await mountDialog();
     await settleRequest(0, capabilities(
       [{ value: "A-LETTER", label: "Letter" }],
@@ -187,19 +235,61 @@ describe("PrintDialog printer capabilities", () => {
     expect(select("print-dialog-paper-source").value).toBe("");
     expect(optionValues("print-dialog-paper")).toEqual([""]);
     expect(optionValues("print-dialog-paper-source")).toEqual([""]);
-    await submitForm();
-    expect(onStartPrint).not.toHaveBeenCalled();
-    expect(container?.textContent).toContain("Wait for this printer's options to finish loading.");
-
-    await settleRequest(1, capabilities(
-      [{ value: "B-LEGAL", label: "Legal" }],
-      [{ value: "B-TRAY", label: "Tray B" }],
-    ));
+    expect(container?.querySelector<HTMLButtonElement>("button[type='submit']")?.disabled).toBe(false);
     await submitForm();
     expect(onStartPrint).toHaveBeenCalledWith(expect.objectContaining({
       printer: "Printer B",
       options: {},
     }));
+  });
+
+  it("rejects a same-turn A-to-B-to-A default submit using the render-captured generation", async () => {
+    await mountDialog();
+    const staleSubmit = captureSubmitHandler();
+
+    await act(async () => {
+      const printer = select("print-dialog-printer");
+      printer.value = "Printer B";
+      printer.dispatchEvent(new Event("change", { bubbles: true }));
+      printer.value = "Printer A";
+      printer.dispatchEvent(new Event("change", { bubbles: true }));
+      staleSubmit({ preventDefault: vi.fn() });
+    });
+
+    expect(onStartPrint).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("Wait for this printer's options to finish loading.");
+    expect(requests.map((request) => request.printer)).toEqual([
+      "Printer A",
+      "Printer B",
+      "Printer A",
+    ]);
+  });
+
+  it("rejects explicit paper choices during discovery and after discovery fails", async () => {
+    await mountDialog();
+    await chooseUnavailableOption("print-dialog-paper", "UNVERIFIED-SIZE");
+    expect(container?.querySelector<HTMLButtonElement>("button[type='submit']")?.disabled).toBe(true);
+    await submitForm();
+    expect(onStartPrint).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("Wait for this printer's paper options to finish loading");
+
+    await rejectRequest(0, new Error("discovery failed"));
+    await submitForm();
+    expect(onStartPrint).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("Printer options could not be verified");
+  });
+
+  it("rejects an explicit paper token that is not in the current ready capabilities", async () => {
+    await mountDialog();
+    await settleRequest(0, capabilities(
+      [{ value: "ADVERTISED-SIZE", label: "Letter" }],
+      [{ value: "ADVERTISED-TRAY", label: "Tray" }],
+    ));
+    await chooseUnavailableOption("print-dialog-paper-source", "UNADVERTISED-TRAY");
+    expect(container?.querySelector<HTMLButtonElement>("button[type='submit']")?.disabled).toBe(true);
+    await submitForm();
+    expect(onStartPrint).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("Choose a paper size or source advertised for this printer.");
   });
 
   it("ignores stale A-to-B-to-A replies even when an old request has the selected printer name", async () => {
@@ -272,5 +362,21 @@ describe("PrintDialog printer capabilities", () => {
       [],
     ));
     expect(optionValues("print-dialog-paper")).toEqual(["", "REOPENED"]);
+  });
+
+  it("ignores a pending capability reply after the dialog closes", async () => {
+    await mountDialog();
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>(".tool-panel__secondary-button")?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    expect(onClose).toHaveBeenCalledOnce();
+
+    await settleRequest(0, capabilities(
+      [{ value: "CLOSED", label: "Closed-dialog paper" }],
+      [],
+    ));
+    expect(optionValues("print-dialog-paper")).toEqual([""]);
   });
 });

@@ -49,9 +49,9 @@ Paper source may be called a tray or drawer in the printer's own software.
 Leave either field at **Printer default** to use its normal setting. A printer
 with no advertised sources has only the default source choice.
 
-Changing printers clears paper choices. If RaioPDF cannot read a printer's
-choices, you can still print with its defaults. macOS also offers sides and
-orientation; Windows uses the printer's existing defaults for those settings.
+Changing printers clears paper choices. While choices load, or if RaioPDF cannot
+read them, you can still print with the printer's defaults. macOS also offers
+sides and orientation; Windows uses the printer's existing defaults for those settings.
 On Windows, choosing a paper size or source fits each visible page proportionally
 inside that paper's printable area. Large custom forms may exceed the supported
 rendering limit. Printer settings apply to this job and do not change saved

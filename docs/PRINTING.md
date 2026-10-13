@@ -5,18 +5,22 @@ printer. Choices apply to one job. Printer default omits the override; a
 source is selectable only when the queue or driver advertises it. Changing
 printers clears paper choices, and submission rechecks explicit choices so a
 removed printer option produces an error rather than a silent substitution.
+Default paper settings can be submitted while discovery is pending or fails;
+explicit paper choices require a successful query for the current printer.
 
 On macOS, the dialog retains sides and orientation controls. CUPS receives
 advertised `PageSize` and `InputSlot` tokens, with existing `sides` and
 `orientation-requested` options. Page ranges follow CUPS's ascending document
-order, and copies/collation follow queue semantics. Printer discovery failure
-still allows default paper settings.
+order, and copies/collation follow queue semantics. Sides and orientation do not
+depend on paper discovery.
 
 On Windows, jobs with default options retain the existing Ghostscript
 `mswinpr2` path and divide-and-queue `printto` fallback. An explicit paper size
 or source uses a job-local, driver-normalized DEVMODE and GDI document. It
 preserves the driver's duplex, orientation, color and other defaults, forces
-driver copies to one, and submits one whole document per requested copy. It
+driver copies to one when supported, and submits one whole document per
+requested copy. Drivers without a copy field can still advertise paper choices;
+an active normalized copy field must always be one. It
 never falls back to a path that discards the selected settings. No `SetPrinter`
 call changes global preferences.
 

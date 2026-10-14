@@ -52,6 +52,43 @@ AI assistant use RaioPDF's tools. It's **off** by default, and even when you
 turn it on, it talks only to the AI program you connected — over a direct
 on-device channel, not the internet.
 
+## Connect the ChatGPT desktop app or Codex
+
+The ChatGPT desktop app, Codex CLI, and Codex IDE extension can share one MCP
+configuration on the same computer. They support **STDIO**, which means the AI
+program starts RaioPDF's connector as a local process. It is not a web server
+and does not need an open network port.
+
+First turn on **Open Raio to AI** in RaioPDF. Then, in a terminal on that same
+computer, run the command shown in the RaioPDF panel, replacing the path with
+the one shown there: `codex mcp add raiopdf -- "<path-to>/raiopdf-mcp"`.
+
+You can also add the entry by hand to `~/.codex/config.toml` (Windows:
+`%USERPROFILE%\.codex\config.toml`). Add the table `[mcp_servers.raiopdf]` and,
+on the next line, `command = '<path-to>/raiopdf-mcp'`.
+
+Keep the **single quotes** around the path. They keep the backslashes in a
+Windows path intact; a double-quoted path such as `"C:\Users\..."` contains an
+invalid TOML escape and can stop the app from loading its configuration. Keep
+the `mcp_servers` spelling and merge this table into your existing file instead
+of replacing the file. Fully quit and reopen the ChatGPT desktop app after
+adding it. The Codex CLI and IDE extension use the same host configuration.
+
+The ChatGPT desktop app also offers **Settings → MCP Servers → Add server**.
+Choose **STDIO**, enter the connector command, save it, and choose **Restart**.
+ChatGPT in a web browser does not read the local Codex configuration or launch
+programs on your computer, so it cannot run this local connector. Remote MCP
+connections in the web app are a different setup; do not expose RaioPDF's
+connector to the internet.
+
+## If the tools are listed but will not run
+
+An MCP tool schema is a machine-readable description of the tool's inputs and
+outputs. RaioPDF versions through 0.1.6 advertised those schemas as JSON Schema
+**draft-07**, which some clients reject before they call a tool. The current
+connector advertises JSON Schema **2020-12** instead. Update RaioPDF, then fully
+quit and reopen the AI client so it reads the tool list again.
+
 ## The one thing that reaches out
 
 Your documents never leave your machine. By default, the only reason RaioPDF

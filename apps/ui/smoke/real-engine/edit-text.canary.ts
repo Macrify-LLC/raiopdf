@@ -70,7 +70,7 @@ test("Edit Text: real engine replaces born-digital text and preserves restored b
   saveCanaryArtifact("edit text", "edit-text-bookmarked-output.pdf", saved,
     "real /api/v1/general/edit-text output; confirm Plaintiff changed to Petitioner and bookmark still opens page 1");
 
-  await openPdf(page, "edit-text-bookmarked-output.pdf", saved);
+  await openPdf(page, "edit-text-bookmarked-output.pdf", saved, { readyText: "Petitioner" });
   expect(await searchHitCount(page, "Petitioner")).toBeGreaterThan(0);
   expect(await searchHitCount(page, "Plaintiff")).toBe(0);
   expect(await readOutlineTitles(saved)).toEqual(["Motion"]);
@@ -101,7 +101,7 @@ test("Edit Text: image-bearing mixed document stays within the Phase 0 size enve
 
   expect(saved.byteLength).toBeGreaterThan(source.byteLength * 0.5);
   expect(saved.byteLength).toBeLessThan(source.byteLength * 2);
-  await openPdf(page, "edit-text-image-bearing-output.pdf", saved);
+  await openPdf(page, "edit-text-image-bearing-output.pdf", saved, { readyText: "Raio" });
   expect(await searchHitCount(page, "Raio")).toBeGreaterThan(0);
   expect(await searchHitCount(page, "Acme")).toBe(0);
   logs.assertClean(BENIGN_LOG);
@@ -168,7 +168,7 @@ test("Edit Text: right-click selected replacement changes only the chosen occurr
   saveCanaryArtifact("edit text", "edit-text-selected-output.pdf", saved,
     "real replaceSelectedText output; confirm ONLY the second Smith became Lee");
 
-  await openPdf(page, "edit-text-selected-output.pdf", saved);
+  await openPdf(page, "edit-text-selected-output.pdf", saved, { readyText: "Lee" });
   expect(await searchHitCount(page, "Lee")).toBe(1);
   expect(await searchHitCount(page, "Smith")).toBe(1);
   logs.assertClean(BENIGN_LOG);

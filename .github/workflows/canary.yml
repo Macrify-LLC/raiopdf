@@ -120,7 +120,7 @@ jobs:
 
       - name: Upload Playwright traces and results
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Per-platform name: upload-artifact v4+ forbids two jobs uploading the
           # same immutable artifact name (the macOS canary uses -macos-arm64).
@@ -257,7 +257,7 @@ jobs:
 
       - name: Upload Playwright traces and results
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: canary-playwright-results-macos-arm64
           path: apps/ui/test-results/
@@ -404,7 +404,7 @@ jobs:
 
       - name: Upload engine-host smoke logs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: engine-smoke-logs-macos-arm64
           path: ${{ runner.temp }}/raiopdf-appdata
@@ -586,7 +586,7 @@ jobs:
 
       - name: Upload WebDriver logs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: webdriver-logs-windows-x64
           path: |

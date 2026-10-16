@@ -65,8 +65,9 @@ per-file size limit.
    still flagged. `confirmedReady: false` means at least one check couldn't be
    confirmed automatically — say which, so the attorney can look.
 
-Tell the user up front: bookmarks in the original are not carried into the prepared
-files.
+Bookmarks carry over: each prepared file keeps the bookmarks for its own pages.
+For a document of 50 MB or more, ask the user to check each part's bookmarks before
+filing.
 
 ## Redact
 

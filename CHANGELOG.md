@@ -29,6 +29,12 @@ fades as download volume accrues.
   up to about 2 GB of memory each time — kept running until you rebooted. The
   connector now shuts down with its client, and on Windows the engine is now tied
   to whatever started it, so it also stops if RaioPDF itself crashes.
+- **Prepare for Filing keeps your bookmarks.** Normalizing pages to letter size,
+  and splitting a filing into parts under the portal's size limit, used to drop
+  every bookmark. Each prepared file now keeps its bookmarks, pointing at the right
+  pages, and a split filing gives each part the bookmarks for its own pages. This
+  covers documents under 50 MB; larger documents take a separate path that still
+  needs the same fix.
 - **"Open Raio to AI": the connector's tools can be called again from clients that
   validate against JSON Schema 2020-12.** The tools listed fine, then every call
   failed before reaching RaioPDF with an "unsupported dialect" error naming

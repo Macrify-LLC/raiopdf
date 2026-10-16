@@ -182,6 +182,33 @@ describe("LocalPdfEngine", () => {
     await expectPageRotations(bytes, [0, 0]);
   });
 
+  it("keeps bookmarks when normalizing pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithOutline());
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const bytes = await engine.saveToBytes(normalized);
+    const saved = await PDFDocument.load(bytes);
+
+    await expectPageSizes(bytes, [[612, 792], [612, 792], [612, 792]]);
+    expect(readPdfOutline(saved)).toMatchObject({
+      openMode: "outlines",
+      items: [
+        {
+          title: "Main",
+          target: { kind: "page", pageIndex: 0 },
+          children: [{ title: "Main child", target: { kind: "page", pageIndex: 1 } }],
+        },
+        { title: "Appendix", target: { kind: "page", pageIndex: 2 } },
+      ],
+    });
+    // The destination must point at the redrawn page, not the source document's.
+    expect(outlineDestinationPageIndex(saved, readFirstOutlineDestination(saved))).toBe(0);
+  });
+
   it("normalizes a landscape page with Rotate 90 inside the letter portrait page box", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdfWithRotatedLandscapePage());
@@ -255,6 +282,26 @@ describe("LocalPdfEngine", () => {
 
     expect(outputPdf.getPage(0).node.Annots()?.size() ?? 0).toBe(0);
     expect(await readAllDecodedStreams(bytes)).not.toContain(THIRD_PARTY_APPEARANCE_MARKER);
+  });
+
+  it("keeps each part's own bookmarks when splitting by max bytes", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithOutline());
+
+    // A 1-byte cap forces one (oversized) part per page.
+    const result = await engine.splitByMaxBytes(document, 1);
+    const outlines = await Promise.all(
+      result.parts.map(async (part) => readPdfOutline(await PDFDocument.load(await engine.saveToBytes(part.document)))),
+    );
+
+    expect(result.parts.map((part) => part.pageIndexes)).toEqual([[0], [1], [2]]);
+    // A bookmark whose target lands in another part is dropped; its children
+    // that land here move up a level.
+    expect(outlines.map((outline) => outline.items)).toMatchObject([
+      [{ title: "Main", target: { kind: "page", pageIndex: 0 } }],
+      [{ title: "Main child", target: { kind: "page", pageIndex: 0 } }],
+      [{ title: "Appendix", target: { kind: "page", pageIndex: 0 } }],
+    ]);
   });
 
   it("splits documents by max bytes with greedy page-boundary packing", async () => {

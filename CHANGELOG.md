@@ -23,6 +23,12 @@ fades as download volume accrues.
 
 ### Fixed
 
+- **Prepare for Filing keeps your bookmarks.** Normalizing pages to letter size,
+  and splitting a filing into parts under the portal's size limit, used to drop
+  every bookmark. Each prepared file now keeps its bookmarks, pointing at the right
+  pages, and a split filing gives each part the bookmarks for its own pages. This
+  covers documents under 50 MB; larger documents take a separate path that still
+  needs the same fix.
 - **"Open Raio to AI": the connector's tools can be called again from clients that
   validate against JSON Schema 2020-12.** The tools listed fine, then every call
   failed before reaching RaioPDF with an "unsupported dialect" error naming

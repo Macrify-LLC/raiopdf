@@ -566,6 +566,11 @@ export class LocalPdfEngine implements PdfEngine {
       });
     }
 
+    // The redraw builds a new document, so the outline has to be carried across
+    // explicitly or a bookmarked filing comes out with none. Pages map 1:1.
+    const outline = readPdfOutline(source);
+    writePdfOutlineInPlace(output, outline, { preserveSource: source });
+
     return this.store(await output.save());
   }
 
@@ -579,6 +584,7 @@ export class LocalPdfEngine implements PdfEngine {
 
     const source = await this.load(document);
     const pageIndices = source.getPageIndices();
+    const outline = readPdfOutline(source);
     const parts: Array<{
       bytes: Uint8Array;
       pageIndexes: number[];
@@ -590,6 +596,7 @@ export class LocalPdfEngine implements PdfEngine {
     while (start < pageIndices.length) {
       const part = await packSplitPart(
         source,
+        outline,
         pageIndices,
         start,
         maxBytes,
@@ -1981,6 +1988,7 @@ interface SplitPart {
  */
 async function packSplitPart(
   source: PDFDocument,
+  outline: PdfOutlineState,
   pageIndices: readonly number[],
   start: number,
   maxBytes: number,
@@ -1995,7 +2003,7 @@ async function packSplitPart(
   let candidate = clampSplitCandidate(initialGuess, 1, remaining);
 
   for (;;) {
-    const bytes = await createDocumentBytesForPages(source, pagesFor(candidate));
+    const bytes = await createDocumentBytesForPages(source, outline, pagesFor(candidate));
 
     if (bytes.byteLength > maxBytes) {
       if (candidate === 1) {
@@ -2064,6 +2072,7 @@ function clampSplitCandidate(value: number, min: number, max: number): number {
 
 async function createDocumentBytesForPages(
   source: PDFDocument,
+  outline: PdfOutlineState,
   pageIndexes: readonly number[],
 ): Promise<Uint8Array> {
   if (pageIndexes.length === 0) {
@@ -2076,6 +2085,11 @@ async function createDocumentBytesForPages(
   // must not re-stamp Producer/CreationDate on a source whose Info was
   // scrubbed — copyPages alone silently drops both.
   preserveSourcePdfMetadataInPlace(output, [source]);
+  // Each part keeps the bookmarks that point into its own pages. Written before
+  // save so the size probe counts them against the cap.
+  const pageMap = new Map(pageIndexes.map((pageIndex, outputIndex) => [pageIndex, outputIndex]));
+  const mapped = mapPdfOutlineItems(outline.items, (pageIndex) => pageMap.get(pageIndex) ?? null);
+  writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
 
   return output.save();
 }

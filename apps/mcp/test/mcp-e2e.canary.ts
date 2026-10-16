@@ -20,7 +20,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   copyFileSync,
   existsSync,
@@ -186,6 +187,20 @@ function writeEnableFlag(configDir: string): void {
   writeFileSync(flag, "enabled\n");
 }
 
+function connectorEnv(configDir: string): Record<string, string> {
+  return {
+    ...ENV_BASE,
+    // Pin XDG_CONFIG_HOME so the flag we wrote is the one the gate reads (isolated
+    // from the real user config). See gate.ts for the full resolution order.
+    XDG_CONFIG_HOME: configDir,
+    RAIOPDF_ENGINE_HOST_BIN: engineHostBin,
+    RAIOPDF_ENGINE_PAYLOAD_DIR: payloadDir,
+    ...DEV_ENGINE_TOOLCHAIN_ENV,
+    // The connector owns its engine's lifecycle; never let it self-shutdown mid-run.
+    RAIOPDF_ENGINE_IDLE_SHUTDOWN_MINUTES: "0",
+  };
+}
+
 /**
  * Spawn the built connector as a child over stdio and connect an MCP client.
  * `configDir` is the connector's config root (its gate flag lives under it), so
@@ -199,17 +214,7 @@ async function connect(configDir: string): Promise<Client> {
     args: [bundledConnector],
     cwd: repoRoot,
     stderr: "inherit",
-    env: {
-      ...ENV_BASE,
-      // Pin XDG_CONFIG_HOME so the flag we wrote is the one the gate reads (isolated
-      // from the real user config). See gate.ts for the full resolution order.
-      XDG_CONFIG_HOME: configDir,
-      RAIOPDF_ENGINE_HOST_BIN: engineHostBin,
-      RAIOPDF_ENGINE_PAYLOAD_DIR: payloadDir,
-      ...DEV_ENGINE_TOOLCHAIN_ENV,
-      // The connector owns its engine's lifecycle; never let it self-shutdown mid-run.
-      RAIOPDF_ENGINE_IDLE_SHUTDOWN_MINUTES: "0",
-    },
+    env: connectorEnv(configDir),
   });
 
   const client = new Client({ name: "raiopdf-mcp-canary", version: "0.1.0" });
@@ -662,6 +667,42 @@ describe("MCP end-to-end canary (real connector + real engine)", () => {
       rmSync(offDir, { recursive: true, force: true });
     }
   });
+
+  it("exits and stops its engine when the client just closes stdin", async () => {
+    // A client that quits just closes the pipe; see installShutdownHandlers.
+    const child = spawn(nodeBin, [bundledConnector], {
+      cwd: repoRoot,
+      env: connectorEnv(enabledConfigDir),
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+    let stdout = "";
+    const healthAnswered = new Promise<void>((resolve) => {
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+        if (stdout.includes('"id":1')) resolve();
+      });
+    });
+    const send = (message: unknown): void => {
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+    send({
+      jsonrpc: "2.0",
+      id: 0,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "stdin-close", version: "1" } },
+    });
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    // Boot the engine first so there is a real engine host to leak.
+    send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "raiopdf_health", arguments: {} } });
+    await healthAnswered;
+    expect(stdout).toContain('"ok":true');
+
+    child.stdin.end();
+    const code = await Promise.race([exited, delay(20_000, "timeout" as const, { ref: false })]);
+    if (code === "timeout") child.kill();
+    expect(code, "connector should exit once stdin closes").toBe(0);
+  }, 180_000);
 
   it("advertises exactly the 28 documented tools", async () => {
     const listed = (await enabled.listTools()).tools.map((tool) => tool.name).sort();

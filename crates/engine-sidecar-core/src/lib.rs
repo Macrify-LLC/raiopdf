@@ -1019,6 +1019,10 @@ pub fn spawn_engine(config: &SidecarConfig, port: u16) -> std::io::Result<Child>
     command.stderr(Stdio::piped());
     configure_child_process(&mut command);
     let mut child = command.spawn()?;
+    // Unix has no equivalent: a SIGKILLed shell or engine host still orphans the
+    // JVM there (an engine host whose stdin closes stops it normally).
+    #[cfg(windows)]
+    bind_to_owner_lifetime(&child);
 
     if let Some(stdout) = child.stdout.take() {
         copy_pipe_to_log(stdout, Arc::clone(&log_writer));
@@ -1445,6 +1449,57 @@ fn kill_child(child: &Arc<Mutex<Option<Child>>>) -> bool {
     kill_process_tree(&mut child);
     let _ = child.wait();
     true
+}
+
+/// A Windows job that terminates every process in it once its last handle closes.
+#[cfg(windows)]
+pub(crate) fn new_kill_on_close_job() -> Option<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if handle.is_null() {
+        return None;
+    }
+    // SAFETY: a fresh, valid handle we exclusively own; OwnedHandle closes it.
+    let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let configured = unsafe {
+        SetInformationJobObject(
+            handle,
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    (configured != 0).then_some(job)
+}
+
+#[cfg(windows)]
+pub(crate) fn assign_to_job(job: &std::os::windows::io::OwnedHandle, child: &Child) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+    unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) != 0 }
+}
+
+/// Tie an engine JVM's lifetime to this process. Windows doesn't kill children
+/// when their parent dies, so a crashed shell or a hard-killed engine host used
+/// to leave a JVM running until reboot. Every engine joins one kill-on-close job
+/// held for the life of this process: when it exits for any reason, Windows
+/// closes the job and ends the JVM. Best effort — normal stop paths are unchanged.
+#[cfg(windows)]
+fn bind_to_owner_lifetime(child: &Child) {
+    use std::sync::OnceLock;
+
+    static OWNER_JOB: OnceLock<Option<std::os::windows::io::OwnedHandle>> = OnceLock::new();
+    if let Some(job) = OWNER_JOB.get_or_init(new_kill_on_close_job) {
+        assign_to_job(job, child);
+    }
 }
 
 /// Terminate a RaioPDF-owned child and every helper it spawned.

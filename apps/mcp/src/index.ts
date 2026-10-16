@@ -770,7 +770,12 @@ function installShutdownHandlers(
   const dispose = (): void => {
     void engineHandle.dispose();
   };
+  let shuttingDown = false;
   const shutdown = (): void => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
     void server.close().finally(() => {
       void engineHandle.dispose().finally(() => {
         process.exit(0);
@@ -781,13 +786,21 @@ function installShutdownHandlers(
 
   transport.onclose = () => {
     previousClose?.();
-    dispose();
+    // shutdown() disposes the engine itself; don't stop it twice.
+    if (!shuttingDown) {
+      dispose();
+    }
   };
 
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
   process.once("beforeExit", dispose);
   process.once("exit", dispose);
+  // The SDK's stdio transport never reports a client that simply closes the
+  // pipe, so without this the connector (and the engine host + JVM it owns)
+  // outlives every AI-client restart. stdin ending is the client going away.
+  process.stdin.once("end", shutdown);
+  process.stdin.once("close", shutdown);
 }
 
 function isMainModule(): boolean {

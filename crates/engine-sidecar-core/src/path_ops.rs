@@ -39,16 +39,7 @@ use crate::{
 #[cfg(unix)]
 use std::os::unix::{fs::DirBuilderExt, fs::OpenOptionsExt};
 #[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
-#[cfg(windows)]
-use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE},
-    System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    },
-};
+use std::os::windows::io::OwnedHandle;
 
 static TEXT_LAYER_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1145,49 +1136,26 @@ fn kill_child_tree(child: &mut Child) {
 }
 
 #[cfg(windows)]
-struct ChildJob(HANDLE);
+struct ChildJob(#[allow(dead_code)] OwnedHandle);
 
 #[cfg(windows)]
 impl ChildJob {
     fn attach(child: &mut Child) -> OpResult<Self> {
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
+        let Some(job) = crate::new_kill_on_close_job() else {
             kill_child_tree(child);
             let _ = child.wait();
             return Err(PathOpError::failed(
                 "could not create a bounded child process job",
             ));
-        }
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let configured = unsafe {
-            SetInformationJobObject(
-                handle,
-                JobObjectExtendedLimitInformation,
-                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
         };
-        let assigned = configured != 0
-            && unsafe { AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) } != 0;
-        if !assigned {
-            unsafe { CloseHandle(handle) };
+        if !crate::assign_to_job(&job, child) {
             kill_child_tree(child);
             let _ = child.wait();
             return Err(PathOpError::failed(
                 "could not supervise the complete child process tree",
             ));
         }
-        Ok(Self(handle))
-    }
-}
-
-#[cfg(windows)]
-impl Drop for ChildJob {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { CloseHandle(self.0) };
-        }
+        Ok(Self(job))
     }
 }
 

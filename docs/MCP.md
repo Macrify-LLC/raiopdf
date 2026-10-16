@@ -104,6 +104,22 @@ browser, a cloud sandbox, a Cowork container — can't run the connector, and
 registering it from there does nothing. Register in Claude Desktop, Claude Code,
 or the ChatGPT desktop app / Codex on the machine RaioPDF is installed on.
 
+## Recommended workflows skill
+
+The connector gives your AI the tools; the RaioPDF skill
+([`skills/raiopdf/SKILL.md`](../skills/raiopdf/SKILL.md)) tells it how to use them
+for legal work — preparing a document for e-filing (letter-size pages, split under
+the portal's size cap), verified redaction, Bates numbering, productions, and
+exhibit binders — and to ask you for the legal choices (court, size limit, Bates
+prefix, what to withhold) instead of guessing. It's a plain text file and makes no
+calls of its own.
+
+- **Claude (chat, Cowork, Claude Code)** — in Claude Desktop or claude.ai, open
+  **Customize → Skills** and upload `SKILL.md` (or a zip of the `raiopdf` folder).
+  For Claude Code alone, copy the folder to `~/.claude/skills/raiopdf/`.
+- **ChatGPT desktop app / Codex** — copy the folder to `~/.agents/skills/raiopdf/`
+  (Windows: `%USERPROFILE%\.agents\skills\raiopdf\`).
+
 ## How it works
 
 - The connector is a small stdio server. On the first tool call it lazily spawns

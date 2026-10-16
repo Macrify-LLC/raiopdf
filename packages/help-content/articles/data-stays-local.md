@@ -81,6 +81,15 @@ programs on your computer, so it cannot run this local connector. Remote MCP
 connections in the web app are a different setup; do not expose RaioPDF's
 connector to the internet.
 
+## Teach your AI the recommended workflows
+
+RaioPDF also publishes a short skill file, `skills/raiopdf/SKILL.md` in the
+RaioPDF repository, that tells your AI assistant how to use these tools for
+legal work: preparing a document for e-filing, redacting, Bates numbering,
+productions, and exhibit binders. It's plain text and makes no calls of its own.
+In Claude, upload it under **Customize → Skills**; for the ChatGPT desktop app
+or Codex, copy the `raiopdf` folder into `~/.agents/skills/`.
+
 ## If the tools are listed but will not run
 
 An MCP tool schema is a machine-readable description of the tool's inputs and

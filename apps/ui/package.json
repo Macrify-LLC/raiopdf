@@ -31,7 +31,7 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1",
+    "@playwright/test": "^1.63.0",
     "@wdio/tauri-plugin": "^1.2.0",
     "jsdom": "^30.0.1",
     "pdf-lib": "^1.17.1"

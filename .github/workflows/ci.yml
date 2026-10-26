@@ -54,8 +54,16 @@ jobs:
       - name: Test release tooling
         run: pnpm test:release-assets
 
+      # Playwright's own install-deps runs apt-get; the action wraps it so the
+      # downloads are cached and a stalled mirror is retried.
+      - name: Install Playwright's Linux dependencies
+        uses: ./.github/actions/apt-install
+        with:
+          command: pnpm --filter @raiopdf/ui exec playwright install-deps chromium
+          cache-salt: ${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Playwright Chromium
-        run: pnpm --filter @raiopdf/ui exec playwright install chromium --with-deps
+        run: pnpm --filter @raiopdf/ui exec playwright install chromium
 
       - name: UI smoke test
         run: pnpm --filter @raiopdf/ui test:smoke

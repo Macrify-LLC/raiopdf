@@ -7,8 +7,20 @@ description: >
 
 inputs:
   packages:
-    description: Space-separated apt package names.
-    required: true
+    description: Space-separated apt package names. Give this or `command`.
+    required: false
+    default: ""
+  command:
+    description: >
+      A command that installs packages through apt itself (for example
+      `playwright install-deps`), run instead of installing `packages`. apt is
+      configured machine-wide, so it still gets the cache, timeouts and retries.
+    required: false
+    default: ""
+  cache-salt:
+    description: Extra cache-key input, such as a lockfile hash for `command`.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -18,13 +30,20 @@ runs:
       shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
+        COMMAND: ${{ inputs.command }}
+        SALT: ${{ inputs.cache-salt }}
       run: |
-        hash=$(printf '%s\n' $PACKAGES | sort -u | sha256sum | cut -c1-16)
+        if [ -z "$PACKAGES" ] && [ -z "$COMMAND" ]; then
+          echo "::error::apt-install needs packages or command"; exit 1
+        fi
+        hash=$( { printf '%s\n' $PACKAGES | sort -u; printf '%s\n' "$COMMAND" "$SALT"; } | sha256sum | cut -c1-16)
         # ImageVersion changes when GitHub rebuilds the image (about weekly);
         # the prefix restore below still reuses whatever .debs are unchanged.
-        echo "prefix=apt-${ImageOS}-${hash}-" >> "$GITHUB_OUTPUT"
-        echo "key=apt-${ImageOS}-${hash}-${ImageVersion}" >> "$GITHUB_OUTPUT"
-        echo "dir=${RUNNER_TEMP}/apt-archives" >> "$GITHUB_OUTPUT"
+        {
+          echo "prefix=apt-${ImageOS}-${hash}-"
+          echo "key=apt-${ImageOS}-${hash}-${ImageVersion}"
+          echo "dir=${RUNNER_TEMP}/apt-archives"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Restore cached .deb files
       id: restore
@@ -39,27 +58,36 @@ runs:
       shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
+        COMMAND: ${{ inputs.command }}
         ARCHIVES: ${{ steps.key.outputs.dir }}
       run: |
         sudo mkdir -p "$ARCHIVES/partial"
-        opts=(
-          -o "Dir::Cache::Archives=$ARCHIVES"
-          -o Acquire::Retries=3
-          -o Acquire::http::Timeout=30
-          -o Acquire::https::Timeout=30
-        )
+        # Machine-wide, so apt calls made by `command` pick it up too.
+        sudo tee /etc/apt/apt.conf.d/99ci-apt-install >/dev/null <<EOF
+        Dir::Cache::Archives "$ARCHIVES";
+        Acquire::Retries "3";
+        Acquire::http::Timeout "30";
+        Acquire::https::Timeout "30";
+        EOF
         # Each attempt is bounded, so a stalled download restarts instead of
         # running out the job clock. Already-downloaded .debs are kept.
         for attempt in 1 2 3; do
-          if sudo timeout 180 apt-get "${opts[@]}" update -q \
-            && sudo timeout 300 apt-get "${opts[@]}" install -y -q $PACKAGES; then
+          if [ -n "$COMMAND" ]; then
+            timeout 480 bash -c "$COMMAND" && exit 0
+          elif sudo timeout 180 apt-get update -q \
+            && sudo timeout 300 apt-get install -y -q $PACKAGES; then
             exit 0
           fi
           echo "::warning::apt attempt $attempt failed or timed out; retrying"
           # A timeout can interrupt dpkg; finish any half-configured packages.
           sudo dpkg --configure -a || true
-          # The runner's default Azure mirror is the one that stalls; retry
-          # against the main Ubuntu archive instead.
+          # The runner's default Azure mirror is the one that stalls. Its apt
+          # sources read a mirror list; drop Azure from it (keeping the other
+          # entries), and from any plain source line.
+          list=/etc/apt/apt-mirrors.txt
+          if [ -f "$list" ] && grep -v 'azure\.archive\.ubuntu\.com' "$list" | grep -q .; then
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' "$list"
+          fi
           sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' \
             /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
           sleep 5
@@ -70,11 +98,12 @@ runs:
     # Runs even when the install failed or the job timed out, so the .debs
     # that did arrive are kept for the next run.
     - name: Prepare .deb files for caching
-      if: always() && steps.restore.outputs.cache-hit != 'true'
+      if: always()
       shell: bash
       env:
         ARCHIVES: ${{ steps.key.outputs.dir }}
       run: |
+        sudo rm -f /etc/apt/apt.conf.d/99ci-apt-install
         sudo rm -rf "$ARCHIVES/partial" "$ARCHIVES/lock"
         sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"
 

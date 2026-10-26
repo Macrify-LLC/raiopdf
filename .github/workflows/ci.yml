@@ -170,7 +170,7 @@ jobs:
   print-canary:
     name: Print-to-PDF canary (Linux)
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout

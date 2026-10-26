@@ -35,6 +35,7 @@ runs:
         restore-keys: ${{ steps.key.outputs.prefix }}
 
     - name: apt-get install
+      id: install
       shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
@@ -52,22 +53,37 @@ runs:
         for attempt in 1 2 3; do
           if sudo timeout 180 apt-get "${opts[@]}" update -q \
             && sudo timeout 300 apt-get "${opts[@]}" install -y -q $PACKAGES; then
-            installed=1
-            break
+            exit 0
           fi
           echo "::warning::apt attempt $attempt failed or timed out; retrying"
           # A timeout can interrupt dpkg; finish any half-configured packages.
           sudo dpkg --configure -a || true
+          # The runner's default Azure mirror is the one that stalls; retry
+          # against the main Ubuntu archive instead.
+          sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' \
+            /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
           sleep 5
         done
-        [ "${installed:-}" = 1 ] || { echo "::error::apt-get install failed after 3 attempts"; exit 1; }
-        # Hand the archive dir back to the runner user so the cache can save it.
+        echo "::error::apt-get install failed after 3 attempts"
+        exit 1
+
+    # Runs even when the install failed or the job timed out, so the .debs
+    # that did arrive are kept for the next run.
+    - name: Prepare .deb files for caching
+      if: always() && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        ARCHIVES: ${{ steps.key.outputs.dir }}
+      run: |
         sudo rm -rf "$ARCHIVES/partial" "$ARCHIVES/lock"
         sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"
 
+    # A complete download is saved under the exact key. An incomplete one is
+    # saved under a run-specific key that only the prefix restore matches, so
+    # the next run resumes from it and then saves the complete set.
     - name: Save .deb files
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: always() && steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.key.outputs.dir }}
-        key: ${{ steps.key.outputs.key }}
+        key: ${{ steps.install.outcome == 'success' && steps.key.outputs.key || format('{0}partial-{1}-{2}', steps.key.outputs.prefix, github.run_id, github.run_attempt) }}

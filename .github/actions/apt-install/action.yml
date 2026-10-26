@@ -72,7 +72,7 @@ runs:
         # Each attempt is bounded, so a stalled download restarts instead of
         # running out the job clock. Already-downloaded .debs are kept.
         for attempt in 1 2 3; do
-          if [ "$attempt" = 1 ]; then echo "TEMP: forcing attempt 1 to fail"; echo "== mirrors before"; cat /etc/apt/apt-mirrors.txt || true; false; else
+          if [ "$attempt" = 1 ]; then echo "TEMP: forcing attempt 1 to fail"; echo "== mirrors before"; cat /etc/apt/apt-mirrors.txt || true; else
           if [ -n "$COMMAND" ]; then
             timeout 480 bash -c "$COMMAND" && exit 0
           elif sudo timeout 180 apt-get update -q \
@@ -101,6 +101,7 @@ runs:
     # Runs even when the install failed or the job timed out, so the .debs
     # that did arrive are kept for the next run.
     - name: Prepare .deb files for caching
+      id: prepare
       if: always()
       shell: bash
       env:
@@ -109,12 +110,17 @@ runs:
         sudo rm -f /etc/apt/apt.conf.d/99ci-apt-install
         sudo rm -rf "$ARCHIVES/partial" "$ARCHIVES/lock"
         sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"
+        # Don't save an empty archive: the newest prefix match wins a restore,
+        # so it would hide an older, complete one.
+        if compgen -G "$ARCHIVES/*.deb" >/dev/null; then
+          echo "has-debs=true" >> "$GITHUB_OUTPUT"
+        fi
 
     # A complete download is saved under the exact key. An incomplete one is
     # saved under a run-specific key that only the prefix restore matches, so
     # the next run resumes from it and then saves the complete set.
     - name: Save .deb files
-      if: always() && steps.restore.outputs.cache-hit != 'true'
+      if: always() && steps.restore.outputs.cache-hit != 'true' && steps.prepare.outputs.has-debs == 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.key.outputs.dir }}

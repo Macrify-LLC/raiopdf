@@ -21,6 +21,9 @@ updates:
       interval: weekly
 
   - package-ecosystem: github-actions
-    directory: /
+    # The composite action under .github/actions pins actions/cache too.
+    directories:
+      - /
+      - /.github/actions/apt-install
     schedule:
       interval: weekly

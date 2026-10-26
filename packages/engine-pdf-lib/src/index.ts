@@ -132,6 +132,12 @@ export function writePdfOutlineInPlace(
   options: {
     preserveSource?: PDFDocument | undefined;
     preserveSources?: readonly { pdf: PDFDocument; idPrefix?: string | undefined }[] | undefined;
+    /**
+     * Keep a bookmark whose raw destination or action can't be copied into
+     * this document (it references other objects in another source) and drop
+     * only its target, instead of failing the whole write.
+     */
+    omitUncopyableTargets?: boolean | undefined;
   } = {},
 ): void {
   const preserveSources = options.preserveSources
@@ -173,6 +179,7 @@ export function writePdfOutlineInPlace(
     items: normalizedItems,
     itemRefs,
     rawTargetsById,
+    omitUncopyableTargets: options.omitUncopyableTargets === true,
   });
 
   context.assign(
@@ -227,6 +234,28 @@ export function offsetPdfOutlineItems(
   offset: number,
 ): PdfOutlineMapResult {
   return mapPdfOutlineItems(items, (pageIndex) => pageIndex + offset);
+}
+
+/**
+ * Points every bookmark that lands on a page at the whole page (/Fit), dropping
+ * the stored view. For outlines copied onto pages that were resized or rotated,
+ * where the source's /XYZ or /FitR coordinates no longer mean the same spot.
+ */
+export function fitPdfOutlinePageTargets(
+  items: readonly PdfOutlineItem[],
+): readonly PdfOutlineItem[] {
+  return items.map((item) => {
+    const target: PdfOutlineTarget = item.target.kind === "page"
+      ? { kind: "page", pageIndex: item.target.pageIndex }
+      : item.target.kind === "named" && item.target.resolvedPageIndex !== undefined
+        ? { kind: "page", pageIndex: item.target.resolvedPageIndex }
+        : item.target;
+    return {
+      ...item,
+      target,
+      ...(item.children ? { children: fitPdfOutlinePageTargets(item.children) } : {}),
+    };
+  });
 }
 
 export function createPdfOutlinePageItem(options: {
@@ -1031,8 +1060,9 @@ function assignOutlineSiblings(options: {
   items: readonly PdfOutlineItem[];
   itemRefs: ReadonlyMap<string, PDFRef>;
   rawTargetsById: ReadonlyMap<string, RawOutlineTarget>;
+  omitUncopyableTargets: boolean;
 }): void {
-  const { pdf, parentRef, items, itemRefs, rawTargetsById } = options;
+  const { pdf, parentRef, items, itemRefs, rawTargetsById, omitUncopyableTargets } = options;
 
   items.forEach((item, index) => {
     const ref = itemRefs.get(item.id);
@@ -1048,6 +1078,7 @@ function assignOutlineSiblings(options: {
         items: children,
         itemRefs,
         rawTargetsById,
+        omitUncopyableTargets,
       });
     }
 
@@ -1062,7 +1093,7 @@ function assignOutlineSiblings(options: {
       ...(styleFlags(item.style) > 0 ? { F: styleFlags(item.style) } : {}),
     });
 
-    writeOutlineTarget(pdf, dict, item, rawTargetsById);
+    writeOutlineTarget(pdf, dict, item, rawTargetsById, omitUncopyableTargets);
     pdf.context.assign(ref, dict);
   });
 }
@@ -1072,6 +1103,7 @@ function writeOutlineTarget(
   dict: PDFDict,
   item: PdfOutlineItem,
   rawTargetsById: ReadonlyMap<string, RawOutlineTarget>,
+  omitUncopyableTargets = false,
 ): void {
   if (item.target.kind === "page") {
     assertPageIndex(item.target.pageIndex, pdf.getPageCount(), item.title);
@@ -1114,6 +1146,9 @@ function writeOutlineTarget(
   if (rawTarget.dest) {
     const dest = cloneRawOutlineObjectForContext(pdf, rawTarget.dest, rawTarget.sameDocument === true);
     if (!dest) {
+      if (omitUncopyableTargets) {
+        return;
+      }
       throw new Error(`This bookmark ("${item.title}") couldn't be saved because it points to a place that no longer exists. Edit or remove it and try again.`);
     }
     dict.set(PDFName.of("Dest"), dest);
@@ -1123,6 +1158,9 @@ function writeOutlineTarget(
   if (rawTarget.action) {
     const action = cloneRawOutlineObjectForContext(pdf, rawTarget.action, rawTarget.sameDocument === true);
     if (!action) {
+      if (omitUncopyableTargets) {
+        return;
+      }
       throw new Error(`This bookmark ("${item.title}") couldn't be saved because it points to a place that no longer exists. Edit or remove it and try again.`);
     }
     dict.set(PDFName.of("A"), action);

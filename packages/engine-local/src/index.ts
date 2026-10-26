@@ -66,6 +66,7 @@ import { PdfEngineError, wrapTextBoxLines } from "@raiopdf/engine-api";
 import {
   assessPdfAConversionImpact,
   createPdfOutlinePageItem,
+  fitPdfOutlinePageTargets,
   mapPdfOutlineItems,
   offsetPdfOutlineItems,
   prefixPdfOutlineItemIds,
@@ -567,9 +568,15 @@ export class LocalPdfEngine implements PdfEngine {
     }
 
     // The redraw builds a new document, so the outline has to be carried across
-    // explicitly or a bookmarked filing comes out with none. Pages map 1:1.
+    // explicitly or a bookmarked filing comes out with none. Pages map 1:1, but
+    // the redraw scales and rotates them, so a stored /XYZ or /FitR position
+    // would land on the wrong spot: bookmarks open the whole page instead.
     const outline = readPdfOutline(source);
-    writePdfOutlineInPlace(output, outline, { preserveSource: source });
+    writePdfOutlineInPlace(
+      output,
+      { ...outline, items: fitPdfOutlinePageTargets(outline.items) },
+      { preserveSource: source, omitUncopyableTargets: true },
+    );
 
     return this.store(await output.save());
   }
@@ -2089,7 +2096,11 @@ async function createDocumentBytesForPages(
   // save so the size probe counts them against the cap.
   const pageMap = new Map(pageIndexes.map((pageIndex, outputIndex) => [pageIndex, outputIndex]));
   const mapped = mapPdfOutlineItems(outline.items, (pageIndex) => pageMap.get(pageIndex) ?? null);
-  writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
+  writePdfOutlineInPlace(
+    output,
+    { ...outline, items: mapped.items },
+    { preserveSource: source, omitUncopyableTargets: true },
+  );
 
   return output.save();
 }

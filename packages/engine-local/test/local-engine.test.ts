@@ -209,6 +209,40 @@ describe("LocalPdfEngine", () => {
     expect(outlineDestinationPageIndex(saved, readFirstOutlineDestination(saved))).toBe(0);
   });
 
+  it("opens normalized bookmarks at the whole page, since source coordinates no longer apply", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithXyzAndIndirectRemoteOutline());
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const saved = await PDFDocument.load(await engine.saveToBytes(normalized));
+    const destination = readFirstOutlineDestination(saved);
+
+    expect(outlineDestinationPageIndex(saved, destination)).toBe(1);
+    expect(destination.size()).toBe(2);
+    expect(destination.get(1)).toBe(PDFName.of("Fit"));
+  });
+
+  it("keeps a bookmark whose remote action can't be copied when normalizing or splitting", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithXyzAndIndirectRemoteOutline());
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const normalizedOutline = readPdfOutline(await PDFDocument.load(await engine.saveToBytes(normalized)));
+    expect(normalizedOutline.items.map((item) => item.title)).toEqual(["Second page detail", "External appendix"]);
+
+    const split = await engine.splitByMaxBytes(document, 1);
+    const firstPartOutline = readPdfOutline(
+      await PDFDocument.load(await engine.saveToBytes(split.parts[0]!.document)),
+    );
+    expect(firstPartOutline.items.map((item) => item.title)).toEqual(["External appendix"]);
+  });
+
   it("normalizes a landscape page with Rotate 90 inside the letter portrait page box", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdfWithRotatedLandscapePage());
@@ -1735,6 +1769,56 @@ async function createPdfWithRemoteOutline(): Promise<Uint8Array> {
       First: itemRef,
       Last: itemRef,
       Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+// A /XYZ bookmark into page 2, and a GoToR bookmark whose /F file
+// specification is an indirect object, which can't be copied across documents.
+async function createPdfWithXyzAndIndirectRemoteOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  const secondPage = pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const xyzRef = pdf.context.nextRef();
+  const remoteRef = pdf.context.nextRef();
+  const fileSpecRef = pdf.context.register(pdf.context.obj({
+    Type: PDFName.of("Filespec"),
+    F: PDFString.of("appendix.pdf"),
+  }));
+  pdf.context.assign(
+    xyzRef,
+    pdf.context.obj({
+      Title: PDFString.of("Second page detail"),
+      Parent: rootRef,
+      Next: remoteRef,
+      Dest: [secondPage.ref, PDFName.of("XYZ"), 0, 300, 0],
+    }),
+  );
+  pdf.context.assign(
+    remoteRef,
+    pdf.context.obj({
+      Title: PDFString.of("External appendix"),
+      Parent: rootRef,
+      Prev: xyzRef,
+      A: {
+        S: PDFName.of("GoToR"),
+        F: fileSpecRef,
+        D: PDFString.of("Intro"),
+      },
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: xyzRef,
+      Last: remoteRef,
+      Count: 2,
     }),
   );
   pdf.catalog.set(PDFName.of("Outlines"), rootRef);

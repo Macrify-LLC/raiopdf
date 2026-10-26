@@ -45,7 +45,9 @@ per-file size limit.
    checks.
 2. **Ask for the size cap.** "What's the largest file the portal accepts, in MB?"
    If the user doesn't know, leave the cap out and the pack's own limit is used —
-   tell them which limit that was.
+   tell them which limit that was. `federal-cmecf` has no limit of its own (each
+   court sets one), so for that pack the cap is required: without it the document
+   can't be split or checked against the court's limit — say so plainly.
 3. **Preflight.** Call `prepare_for_filing` with `input` and `pack`. It is
    read-only. Note every warning and its rule citation, especially pages that
    aren't letter-size portrait and pages with no searchable text.
@@ -53,17 +55,30 @@ per-file size limit.
    - `sources`: `[{ path }]` (several documents in upload order also works)
    - `outputDir`: a new folder
    - `pack`: the pack from step 1
-   - `selectedStepIds`: `["normalize-pages", "split-by-size"]`, and add
-     `"make-searchable"` only if the preflight found pages without searchable text
-   - `splitSizeMb`: the user's cap from step 2, if they gave one
-5. **Report the result.** The upload-ready files are in the package's `upload`
-   folder. A document over the cap comes out as numbered parts —
-   "Part 1 of 3", "Part 2 of 3", and so on — to upload in that order. Every page is
-   letter-size portrait. Mention the manifest (`filing-packet-manifest.pdf`), which
-   records what was checked.
-6. **Re-check.** Run `prepare_for_filing` on each output file and report anything
-   still flagged. `confirmedReady: false` means at least one check couldn't be
-   confirmed automatically — say which, so the attorney can look.
+   - `splitSizeMb` and `maxFileBytes`: the user's cap from step 2, if they gave
+     one — `splitSizeMb` in MB, `maxFileBytes` as the same cap in bytes
+     (MB × 1,048,576)
+   - `skippedStepIds`: `["make-searchable"]` only if the preflight found every
+     page already searchable
+
+   Don't pass `selectedStepIds`. It replaces the pack's default steps rather than
+   adding to them, so it would skip steps the court's pack turns on — removing
+   active content and embedded files, scrubbing metadata, flattening forms. The
+   defaults always include page normalization, and splitting once a cap is set.
+5. **Report the result.** The files are in the package's `upload` folder. A
+   document over the cap comes out as numbered parts — "Part 1 of 3", "Part 2 of
+   3", and so on — to upload in that order. Every page is letter-size portrait.
+   Mention the manifest (`filing-packet-manifest.pdf`), which records what was
+   checked.
+6. **Check each part's size against the user's cap.** The packet JSON
+   (`packetJson` in the result) records each file's `bytes` and an `oversized`
+   flag. A single page bigger than the cap can't be split further and comes out
+   as an oversized part: name it and don't call it upload-ready.
+7. **Re-check.** Run `prepare_for_filing` on each output file and report anything
+   still flagged. It checks against the pack's own size limit, not the user's
+   cap, which is why step 6 comes first. `confirmedReady: false` means at least
+   one check couldn't be confirmed automatically — say which, so the attorney can
+   look.
 
 Bookmarks carry over: each prepared file keeps the bookmarks for its own pages.
 For a document of 50 MB or more, ask the user to check each part's bookmarks before
@@ -72,11 +87,18 @@ filing.
 ## Redact
 
 1. Get the exact terms from the user (names, account numbers, SSNs, and so on).
-2. Call `redact_terms` with `input`, a new `output` path, and `terms`; use
+2. **Make sure the document has searchable text first.** `redact_terms` finds
+   terms in the text layer, so on a scan with no text it finds nothing, and its
+   check passes while the SSN is still visible on the page. Run
+   `prepare_for_filing` (read-only) and look for pages without searchable text;
+   if there are any, run `ocr_pdf` first and redact the OCR'd copy.
+3. Call `redact_terms` with `input`, a new `output` path, and `terms`; use
    `wholeWord: true` for short terms that appear inside other words.
-3. `redact_terms` removes the text itself and only writes the file after confirming
+4. `redact_terms` removes the text itself and only writes the file after confirming
    none of the terms survive. Never "redact" by drawing boxes or highlights.
-4. Confirm with `locate_text` on the output for each term — expect no matches.
+5. Confirm with `locate_text` on the output for each term — expect no matches.
+   For a scan, also ask the user to look over the redacted pages: OCR can misread
+   a term, and a misread term is neither found nor redacted.
 
 ## Bates numbering
 
@@ -96,7 +118,10 @@ Call `build_production_set` with the sources in production order, a new
 `"withhold"` with `privilegeAsserted`. Withheld documents get a Bates-stamped slip
 sheet and a row in `draft-privilege-log.csv`; tell the user that log is a draft to
 complete and review before serving. To continue an earlier production's numbering,
-pass its package folder as `continueFrom`. Ask before turning on `includeLoadFiles`
+pass its package folder as `continueFrom` together with the same `prefix`, the
+same `digits`, and `start` set to the next number after the last one produced —
+all three must match the earlier package exactly, or nothing is written. If the
+start doesn't match, the error names the expected next number. Ask before turning on `includeLoadFiles`
 or `combinedPdf`.
 
 ## Exhibit binder

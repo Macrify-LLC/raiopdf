@@ -72,13 +72,11 @@ runs:
         # Each attempt is bounded, so a stalled download restarts instead of
         # running out the job clock. Already-downloaded .debs are kept.
         for attempt in 1 2 3; do
-          if [ "$attempt" = 1 ]; then echo "TEMP: forcing attempt 1 to fail"; echo "== mirrors before"; cat /etc/apt/apt-mirrors.txt || true; else
           if [ -n "$COMMAND" ]; then
             timeout 480 bash -c "$COMMAND" && exit 0
           elif sudo timeout 180 apt-get update -q \
             && sudo timeout 300 apt-get install -y -q $PACKAGES; then
             exit 0
-          fi
           fi
           echo "::warning::apt attempt $attempt failed or timed out; retrying"
           # A timeout can interrupt dpkg; finish any half-configured packages.
@@ -92,7 +90,6 @@ runs:
           fi
           sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' \
             /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
-          echo "== mirrors after"; cat /etc/apt/apt-mirrors.txt || true
           sleep 5
         done
         echo "::error::apt-get install failed after 3 attempts"

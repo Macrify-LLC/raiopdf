@@ -326,6 +326,15 @@ INPUT_PDF="$TMP_DIR/input.pdf"
 mkdir -p -- "$BASE_PATH"
 create_test_pdf "$INPUT_PDF"
 
+# JPDFium's linux-x64 natives bundle an ICU (libicudata.so.74) marked as
+# needing an executable stack. glibc 2.41+ (Ubuntu 26.04 and later) refuses to
+# load such libraries, so every PDF operation fails with "cannot enable
+# executable stack". This tunable restores the old behaviour for the verifying
+# JVM only; RaioPDF ships no Linux engine, so users are unaffected.
+if [[ "$(uname -s)" == "Linux" ]]; then
+  export GLIBC_TUNABLES="${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2"
+fi
+
 STIRLING_BASE_PATH="$BASE_PATH" "$JAVA_BIN" -Xmx1g -jar "$JAR_PATH" \
   --server.address=127.0.0.1 \
   "--server.port=$PORT" \

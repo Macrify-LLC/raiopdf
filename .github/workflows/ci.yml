@@ -18,7 +18,7 @@ concurrency:
 jobs:
   web:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
 
     steps:
@@ -68,7 +68,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-26.04
           - windows-latest
 
     steps:
@@ -94,6 +94,10 @@ jobs:
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
+          # The cache key has the runner OS but not the image version, so name
+          # the image: build-script output linked against one Ubuntu's system
+          # libraries mustn't be restored onto another.
+          prefix-key: v0-rust-${{ matrix.os }}
           workspaces: . -> target
 
       - name: Check formatting
@@ -165,7 +169,7 @@ jobs:
 
   print-canary:
     name: Print-to-PDF canary (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
@@ -178,6 +182,8 @@ jobs:
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
+          # Keep in step with runs-on (see the Shell job's cache step).
+          prefix-key: v0-rust-ubuntu-26.04
           workspaces: . -> target
 
       # A cups-pdf virtual printer turns the real `lp` pipeline into a file we
@@ -185,7 +191,7 @@ jobs:
       - name: Set up a cups-pdf virtual printer
         run: |
           sudo apt-get update
-          sudo apt-get install -y cups cups-pdf cups-client qpdf ghostscript
+          sudo apt-get install -y cups printer-driver-cups-pdf cups-client qpdf ghostscript
           sudo mkdir -p /tmp/rp-cups-out
           sudo chmod 777 /tmp/rp-cups-out
           sudo sed -i 's#^Out .*#Out /tmp/rp-cups-out#' /etc/cups/cups-pdf.conf

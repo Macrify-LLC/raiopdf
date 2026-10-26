@@ -30,7 +30,7 @@ pnpm dev                 # web UI dev server
 pnpm dev:shell           # full Tauri desktop shell
 ```
 
-Requires Node 24+ and, for the shell, a Rust toolchain (stable) plus the platform build deps used in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (on Linux: `libayatana-appindicator3-dev`, `libgtk-3-dev`, `librsvg2-dev`, `libwebkit2gtk-4.1-dev`, `patchelf`).
+Requires Node 24+ and, for the shell, a Rust toolchain (stable) plus the platform build deps used in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (on Linux: `libayatana-appindicator3-dev`, `libgtk-3-dev`, `librsvg2-dev`, `libwebkit2gtk-4.1-dev`, `patchelf`). Linux CI runs on Ubuntu 26.04, whose runner image already includes the compiler toolchain and other basics; on a fresh machine, start from [Tauri's Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux).
 
 ## Before opening a PR
 

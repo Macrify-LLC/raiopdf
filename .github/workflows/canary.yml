@@ -413,7 +413,7 @@ jobs:
 
   release-feature-guard:
     name: Guard — e2e-webdriver never in a release build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Checkout

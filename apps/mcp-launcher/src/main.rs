@@ -61,11 +61,76 @@ fn run() -> Result<i32, String> {
     }
     apply_platform_spawn_flags(&mut command);
 
-    let status = command
-        .status()
+    run_node(command)
+}
+
+/// On Unix the launcher becomes Node (exec), so an AI client that kills the
+/// launcher kills the connector itself -- there is no middle process to orphan.
+#[cfg(unix)]
+fn run_node(mut command: Command) -> Result<i32, String> {
+    use std::os::unix::process::CommandExt;
+
+    let error = command.exec();
+    Err(format!("failed to launch bundled Node runtime: {error}"))
+}
+
+/// Windows has no exec, and killing a parent leaves its children running. Put
+/// Node in a kill-on-close job held only by this launcher: if the launcher dies
+/// for any reason, Windows closes the job and takes Node, the engine host and
+/// its JVM down with it instead of leaving them running until reboot.
+#[cfg(windows)]
+fn run_node(mut command: Command) -> Result<i32, String> {
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("failed to launch bundled Node runtime: {error}"))?;
+    // Best effort: the connector also exits when its stdin closes, so a failed
+    // job only loses the hard-kill guarantee, never the connector itself.
+    let _job = kill_on_close_job(&child)
+        .map_err(|error| eprintln!("raiopdf-mcp: {error}; continuing without child-process job"))
+        .ok();
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for bundled Node runtime: {error}"))?;
 
     Ok(status.code().unwrap_or(1))
+}
+
+/// Same job setup as `new_kill_on_close_job` in engine-sidecar-core (kept local so
+/// this launcher stays dependency-free) -- change both together.
+#[cfg(windows)]
+fn kill_on_close_job(
+    child: &std::process::Child,
+) -> Result<std::os::windows::io::OwnedHandle, String> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if handle.is_null() {
+        return Err("could not create child-process job".to_string());
+    }
+    // SAFETY: a fresh, valid handle we exclusively own; OwnedHandle closes it.
+    let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let configured = unsafe {
+        SetInformationJobObject(
+            handle,
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    if configured == 0 {
+        return Err("could not configure child-process job".to_string());
+    }
+    if unsafe { AssignProcessToJobObject(handle, child.as_raw_handle()) } == 0 {
+        return Err("could not assign Node to child-process job".to_string());
+    }
+    Ok(job)
 }
 
 fn resolve_resource_dir(exe_dir: &Path) -> Result<PathBuf, String> {

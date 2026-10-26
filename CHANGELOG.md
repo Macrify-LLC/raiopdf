@@ -23,6 +23,12 @@ fades as download volume accrues.
 
 ### Fixed
 
+- **"Open Raio to AI" no longer leaves RaioPDF's engine running after your AI
+  client closes.** When Claude Desktop, ChatGPT, or another client quit or
+  restarted, the connector never noticed, so it — and the engine it had started,
+  up to about 2 GB of memory each time — kept running until you rebooted. The
+  connector now shuts down with its client, and on Windows the engine is now tied
+  to whatever started it, so it also stops if RaioPDF itself crashes.
 - **"Open Raio to AI": the connector's tools can be called again from clients that
   validate against JSON Schema 2020-12.** The tools listed fine, then every call
   failed before reaching RaioPDF with an "unsupported dialect" error naming

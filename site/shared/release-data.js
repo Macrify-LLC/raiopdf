@@ -256,11 +256,6 @@
     const latest = latestResult.status === "fulfilled" ? latestResult.value : null;
     const all = allResult.status === "fulfilled" ? allResult.value : [];
 
-    const totalDownloads = (all || []).reduce(
-      (sum, release) => sum + (release.assets || []).reduce((s, asset) => s + (asset.download_count || 0), 0),
-      0
-    );
-
     const selected = pickDownloadRelease(latest);
 
     if (!selected) {
@@ -276,7 +271,6 @@
         releaseName: release ? release.name || release.tag_name : null,
         notesMarkdown: release ? release.body : null,
         mac: null,
-        totalDownloads,
       };
     }
 
@@ -306,7 +300,6 @@
       sha256: digestToSha256(assetSet.installer.digest),
       checksumsUrl: assetSet.checksums.browser_download_url,
       mac,
-      totalDownloads,
     };
   }
 
@@ -327,28 +320,10 @@
     return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   }
 
-  /** Animates a counter element from 0 to target over `duration` ms. Respects prefers-reduced-motion. */
-  function animateCount(el, target, duration = 900) {
-    if (!el) return;
-    if (global.matchMedia && global.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      el.textContent = target.toLocaleString("en-US");
-      return;
-    }
-    const start = performance.now();
-    function tick(now) {
-      const progress = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      el.textContent = Math.round(target * eased).toLocaleString("en-US");
-      if (progress < 1) requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-  }
-
   global.RaioRelease = {
     loadReleaseInfo,
     parseReleaseNotesCompact,
     formatBytes,
     formatDate,
-    animateCount,
   };
 })(window);

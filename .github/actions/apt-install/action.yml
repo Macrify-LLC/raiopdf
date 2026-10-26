@@ -1,0 +1,73 @@
+name: Install apt packages
+description: >
+  apt-get install with the downloaded .deb files cached between runs, and each
+  attempt bounded and retried. The hosted runners' Ubuntu mirror sometimes
+  slows to a crawl mid-download; without this, one stalled package used the
+  whole job's timeout before any of our code ran.
+
+inputs:
+  packages:
+    description: Space-separated apt package names.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Compute apt cache key
+      id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        hash=$(printf '%s\n' $PACKAGES | sort -u | sha256sum | cut -c1-16)
+        # ImageVersion changes when GitHub rebuilds the image (about weekly);
+        # the prefix restore below still reuses whatever .debs are unchanged.
+        echo "prefix=apt-${ImageOS}-${hash}-" >> "$GITHUB_OUTPUT"
+        echo "key=apt-${ImageOS}-${hash}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+        echo "dir=${RUNNER_TEMP}/apt-archives" >> "$GITHUB_OUTPUT"
+
+    - name: Restore cached .deb files
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+
+    - name: apt-get install
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        ARCHIVES: ${{ steps.key.outputs.dir }}
+      run: |
+        sudo mkdir -p "$ARCHIVES/partial"
+        opts=(
+          -o "Dir::Cache::Archives=$ARCHIVES"
+          -o Acquire::Retries=3
+          -o Acquire::http::Timeout=30
+          -o Acquire::https::Timeout=30
+        )
+        # Each attempt is bounded, so a stalled download restarts instead of
+        # running out the job clock. Already-downloaded .debs are kept.
+        for attempt in 1 2 3; do
+          if sudo timeout 180 apt-get "${opts[@]}" update -q \
+            && sudo timeout 300 apt-get "${opts[@]}" install -y -q $PACKAGES; then
+            installed=1
+            break
+          fi
+          echo "::warning::apt attempt $attempt failed or timed out; retrying"
+          # A timeout can interrupt dpkg; finish any half-configured packages.
+          sudo dpkg --configure -a || true
+          sleep 5
+        done
+        [ "${installed:-}" = 1 ] || { echo "::error::apt-get install failed after 3 attempts"; exit 1; }
+        # Hand the archive dir back to the runner user so the cache can save it.
+        sudo rm -rf "$ARCHIVES/partial" "$ARCHIVES/lock"
+        sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"
+
+    - name: Save .deb files
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: ${{ steps.key.outputs.key }}

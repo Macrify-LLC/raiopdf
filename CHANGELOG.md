@@ -15,6 +15,12 @@ fades as download volume accrues.
 
 ### Added
 
+- **A RaioPDF skill for your AI assistant.** `skills/raiopdf/SKILL.md` teaches
+  Claude, ChatGPT, or Codex the recommended way to use "Open Raio to AI" for legal
+  work — preparing a document for e-filing (letter-size pages, split into parts
+  under the portal's size limit), verified redaction, Bates numbering, productions,
+  and exhibit binders — and to ask you for the legal choices instead of guessing.
+  Setup is in `docs/MCP.md`.
 - **"Open Raio to AI" now covers the ChatGPT desktop app and Codex.** The panel
   shows a ready-to-paste `config.toml` entry (the file the ChatGPT desktop app,
   Codex CLI, and the Codex IDE extension all read), the setup prompt walks an

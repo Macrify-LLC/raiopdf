@@ -182,6 +182,67 @@ describe("LocalPdfEngine", () => {
     await expectPageRotations(bytes, [0, 0]);
   });
 
+  it("keeps bookmarks when normalizing pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithOutline());
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const bytes = await engine.saveToBytes(normalized);
+    const saved = await PDFDocument.load(bytes);
+
+    await expectPageSizes(bytes, [[612, 792], [612, 792], [612, 792]]);
+    expect(readPdfOutline(saved)).toMatchObject({
+      openMode: "outlines",
+      items: [
+        {
+          title: "Main",
+          target: { kind: "page", pageIndex: 0 },
+          children: [{ title: "Main child", target: { kind: "page", pageIndex: 1 } }],
+        },
+        { title: "Appendix", target: { kind: "page", pageIndex: 2 } },
+      ],
+    });
+    // The destination must point at the redrawn page, not the source document's.
+    expect(outlineDestinationPageIndex(saved, readFirstOutlineDestination(saved))).toBe(0);
+  });
+
+  it("opens normalized bookmarks at the whole page, since source coordinates no longer apply", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithXyzAndIndirectRemoteOutline());
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const saved = await PDFDocument.load(await engine.saveToBytes(normalized));
+    const destination = readFirstOutlineDestination(saved);
+
+    expect(outlineDestinationPageIndex(saved, destination)).toBe(1);
+    expect(destination.size()).toBe(2);
+    expect(destination.get(1)).toBe(PDFName.of("Fit"));
+  });
+
+  it("keeps a bookmark whose remote action can't be copied when normalizing or splitting", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithXyzAndIndirectRemoteOutline());
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const normalizedOutline = readPdfOutline(await PDFDocument.load(await engine.saveToBytes(normalized)));
+    expect(normalizedOutline.items.map((item) => item.title)).toEqual(["Second page detail", "External appendix"]);
+
+    const split = await engine.splitByMaxBytes(document, 1);
+    const firstPartOutline = readPdfOutline(
+      await PDFDocument.load(await engine.saveToBytes(split.parts[0]!.document)),
+    );
+    expect(firstPartOutline.items.map((item) => item.title)).toEqual(["External appendix"]);
+  });
+
   it("normalizes a landscape page with Rotate 90 inside the letter portrait page box", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdfWithRotatedLandscapePage());
@@ -255,6 +316,26 @@ describe("LocalPdfEngine", () => {
 
     expect(outputPdf.getPage(0).node.Annots()?.size() ?? 0).toBe(0);
     expect(await readAllDecodedStreams(bytes)).not.toContain(THIRD_PARTY_APPEARANCE_MARKER);
+  });
+
+  it("keeps each part's own bookmarks when splitting by max bytes", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithOutline());
+
+    // A 1-byte cap forces one (oversized) part per page.
+    const result = await engine.splitByMaxBytes(document, 1);
+    const outlines = await Promise.all(
+      result.parts.map(async (part) => readPdfOutline(await PDFDocument.load(await engine.saveToBytes(part.document)))),
+    );
+
+    expect(result.parts.map((part) => part.pageIndexes)).toEqual([[0], [1], [2]]);
+    // A bookmark whose target lands in another part is dropped; its children
+    // that land here move up a level.
+    expect(outlines.map((outline) => outline.items)).toMatchObject([
+      [{ title: "Main", target: { kind: "page", pageIndex: 0 } }],
+      [{ title: "Main child", target: { kind: "page", pageIndex: 0 } }],
+      [{ title: "Appendix", target: { kind: "page", pageIndex: 0 } }],
+    ]);
   });
 
   it("splits documents by max bytes with greedy page-boundary packing", async () => {
@@ -1688,6 +1769,56 @@ async function createPdfWithRemoteOutline(): Promise<Uint8Array> {
       First: itemRef,
       Last: itemRef,
       Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+// A /XYZ bookmark into page 2, and a GoToR bookmark whose /F file
+// specification is an indirect object, which can't be copied across documents.
+async function createPdfWithXyzAndIndirectRemoteOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  const secondPage = pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const xyzRef = pdf.context.nextRef();
+  const remoteRef = pdf.context.nextRef();
+  const fileSpecRef = pdf.context.register(pdf.context.obj({
+    Type: PDFName.of("Filespec"),
+    F: PDFString.of("appendix.pdf"),
+  }));
+  pdf.context.assign(
+    xyzRef,
+    pdf.context.obj({
+      Title: PDFString.of("Second page detail"),
+      Parent: rootRef,
+      Next: remoteRef,
+      Dest: [secondPage.ref, PDFName.of("XYZ"), 0, 300, 0],
+    }),
+  );
+  pdf.context.assign(
+    remoteRef,
+    pdf.context.obj({
+      Title: PDFString.of("External appendix"),
+      Parent: rootRef,
+      Prev: xyzRef,
+      A: {
+        S: PDFName.of("GoToR"),
+        F: fileSpecRef,
+        D: PDFString.of("Intro"),
+      },
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: xyzRef,
+      Last: remoteRef,
+      Count: 2,
     }),
   );
   pdf.catalog.set(PDFName.of("Outlines"), rootRef);

@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PendingEdit } from "../lib/edits";
+import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { useEditing, type EditingState } from "./useEditing";
 
 describe("useEditing pin state", () => {
@@ -244,9 +245,38 @@ describe("useEditing pin state", () => {
     expect(getEditing().collectEdits()?.flatten).toBe(false);
   });
 
-  function renderHookValue(): () => EditingState {
+  it("detects a document's fillable fields from pdf.js's Map of field objects", async () => {
+    // pdf.js resolves `getFieldObjects()` to a Map keyed by field name. A
+    // plain-object check on that Map always reads as empty, which hides the
+    // form layer entirely, so pin the shape the app actually receives.
+    const withFields = {
+      getFieldObjects: async () => new Map([["client_name", [{ type: "text" }]]]),
+    } as unknown as PDFDocumentProxy;
+    const withoutFields = {
+      getFieldObjects: async () => null,
+    } as unknown as PDFDocumentProxy;
+
+    let getEditing = renderHookValue(withFields);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getEditing().hasFormFields).toBe(true);
+
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+
+    getEditing = renderHookValue(withoutFields);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getEditing().hasFormFields).toBe(false);
+  });
+
+  function renderHookValue(pdfDocument: PDFDocumentProxy | null = null): () => EditingState {
     let latest: EditingState | null = null;
-    render(<Harness onValue={(value) => { latest = value; }} />);
+    render(<Harness pdfDocument={pdfDocument} onValue={(value) => { latest = value; }} />);
 
     return () => {
       if (!latest) {
@@ -268,8 +298,14 @@ describe("useEditing pin state", () => {
   }
 });
 
-function Harness({ onValue }: { onValue: (value: EditingState) => void }) {
-  const editing = useEditing(null);
+function Harness({
+  pdfDocument = null,
+  onValue,
+}: {
+  pdfDocument?: PDFDocumentProxy | null;
+  onValue: (value: EditingState) => void;
+}) {
+  const editing = useEditing(pdfDocument);
   onValue(editing);
   return null;
 }

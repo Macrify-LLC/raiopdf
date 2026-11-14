@@ -52,7 +52,7 @@ importers:
         version: 8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
       vitest:
         specifier: ^5.0.5
-        version: 5.0.5(@types/node@26.4.0)(jsdom@30.0.1)(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+        version: 5.1.0(@types/node@26.4.0)(jsdom@30.0.1)(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
 
   apps/mcp:
     dependencies:
@@ -122,7 +122,7 @@ importers:
         version: 9.29.1
       '@wdio/tauri-service':
         specifier: ^1.4.0
-        version: 1.5.0(expect-webdriverio@5.7.0)(tsx@4.23.15)(webdriverio@9.29.1)
+        version: 1.5.1(expect-webdriverio@5.7.0)(tsx@4.23.15)(webdriverio@9.29.1)
       '@wdio/types':
         specifier: ^9.31.2
         version: 9.31.2
@@ -756,8 +756,8 @@ packages:
     resolution: {integrity: sha512-f1x/vJXIfjOlEmejYpbkbgw1gOqpPECwMvMEtBqe47j7H2Hg8h8w3o3ikhSXq3MI15kg+oQ0exWO0uCtTNJLoQ==}
     engines: {node: ^18.14.0 || ^20.0.0 || ^22.0.0 || >=24.0.0}
 
-  '@jridgewell/resolve-uri@3.1.2':
-    resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
+  '@jridgewell/resolve-uri@3.1.3':
+    resolution: {integrity: sha512-lhTtjtoEArWBjismtfS761S9Hlyn+nIZqOZVYoZ1Xn82PMNMVnk+jj/NhC4fAXGTs7ydONcJiR5vyQBTMDu27g==}
     engines: {node: '>=6.0.0'}
 
   '@jridgewell/sourcemap-codec@1.6.0':
@@ -1226,8 +1226,8 @@ packages:
       babel-plugin-react-compiler:
         optional: true
 
-  '@vitest/mocker@5.0.5':
-    resolution: {integrity: sha512-xLL3lkDegJZw+MGoGaCCsFayDZthGgpAtr3Vziyfc4p7xH89K7KRPcRBBh/kEYm0Aqkt5DtTmkYpBtRV/FrHZg==}
+  '@vitest/mocker@5.1.0':
+    resolution: {integrity: sha512-5umB9/jlWcqVS6fsrFmv5Gdnpu6wAUio/lEOwAmvB7v+lFo/IW2B9FhAD0p19GCULTgMzLCdUmuCDCnAzWgppQ==}
     peerDependencies:
       msw: ^2.4.9 || ^3.0.0
       vite: ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -1249,8 +1249,8 @@ packages:
   '@vitest/snapshot@4.1.10':
     resolution: {integrity: sha512-xRkfOT1qpTAi/Ti4Y1LtfRc3kEuqxGw59eN2jN9pRWMtS/XDevekhcFSqvQqjUNGksfjMJu3Y+oJ+4Ypn2OaJw==}
 
-  '@vitest/spy@5.0.5':
-    resolution: {integrity: sha512-lwJRExuH417257Q5wv9QYugN9IMJkoxcrKrYxGPQkBzl7wlNpTUxD/5yNX4ESKVUIShKPgkGchYPFMWOOk0wzw==}
+  '@vitest/spy@5.1.0':
+    resolution: {integrity: sha512-2DPO5OMHWKrBngC+fCmTQqemNF0gidRhp3lxbBmRhW+M1XJrfgPpqNqWVevXtn2f2ufD5ZaR1B6B641aAlcX5A==}
 
   '@vitest/utils@4.1.10':
     resolution: {integrity: sha512-fy9am/HWxbaGt/Sawrp90vt6Y6jQwf1RX77cz3uwoJwJVMli/e1IEwRPnMNJ7vKfPTwo0diXifkpPvwH9v7nGA==}
@@ -1302,20 +1302,20 @@ packages:
     resolution: {integrity: sha512-NhxHeIFd0iHpb8sud3ahOilE/bgm5MBBzSq+xSKW+hTUYdmeyy4w+KX5p/+AQ0dsUEIToaA4xjZRUTCwY+65Wg==}
     engines: {node: '>=18.20.0'}
 
-  '@wdio/native-core@1.3.0':
-    resolution: {integrity: sha512-wUwc0QTdvhD0LwH4YcRaN9JWLX/yac8sovddUR5/4sqHMNJr3yaN11bpIfYoD/bEk+1nTLjWuDCFpe5l5wUgLQ==}
+  '@wdio/native-core@1.3.1':
+    resolution: {integrity: sha512-fdGk2lEr2vS+bClJXuZEnsG30cLzQv+B9W+dAt/Yte/fE33s/vDBn7hHwFx8aZLTOS0pPExErUxYiZEMXX+04g==}
     engines: {node: '>=18.20.0'}
 
   '@wdio/native-spy@1.1.0':
     resolution: {integrity: sha512-1BTbiWo9fNOsnSRYTjBE0Z6PtknFMtN7/TH2SsnishkIABUHH8ONKB+NWiTCiX8IkFiARguo2bJHEQBOULXlwA==}
     engines: {node: ^18.12.0 || ^20.9.0 || >=22.11.0}
 
-  '@wdio/native-spy@1.4.0':
-    resolution: {integrity: sha512-unsC2Vgu5T9atD478Zj/p2N+rVSK4i/NibIaaEw4rZF/T5u5bmAHChFntEiBEfyMzd62VwbhKhzwwOSKjzrfJA==}
+  '@wdio/native-spy@1.4.1':
+    resolution: {integrity: sha512-KGOmgaicHqDkqj+s2bxXsRsb27IzW6carlyTu1xcrJI34yUbC0v14F8mbhuZcewW+mt2xhmC17yITwAbNa8PKw==}
     engines: {node: '>=18.20.0'}
 
-  '@wdio/native-types@2.6.0':
-    resolution: {integrity: sha512-MVMVpZTH+UY6nUtLClCzY4BQSIs/nCCHo81i4ClLR+b2NehyBvwccttXDAGPgf0icyHUhd+PgIPXaLgRcm4M9A==}
+  '@wdio/native-types@2.6.1':
+    resolution: {integrity: sha512-Rm5chX+MrRhVgJYcYdcX/yyTZaLjxvi0w/fnSgPaDT16gMIntXlk22K2x3hwEdaUonOKepZyhh4jr9ZgRz7UaQ==}
     engines: {node: '>=18.20.0'}
 
   '@wdio/native-utils@2.5.0':
@@ -1364,8 +1364,8 @@ packages:
     resolution: {integrity: sha512-qeQQ4D0Q4BkwC+Cyez1I343DRm9UErCXksZ/DN1qCpJCorEEPKL3IiYb34OtNJBgnbhqwtGukyjOZYvnpPz95A==}
     engines: {node: ^18.12.0 || ^20.9.0 || >=22.11.0}
 
-  '@wdio/tauri-service@1.5.0':
-    resolution: {integrity: sha512-S3fs8T+jgNOFi4x/X2z69unS/1K3ZB28+owBouhHtVnrMKeBWAKP46IHnp8c8AZXppn6fiPNC4M1jfRZbLKeKw==}
+  '@wdio/tauri-service@1.5.1':
+    resolution: {integrity: sha512-nfzJU2x7bxvIXtYo+yvrX4Xwuba8h5hXOlJ0IyHanGg0ELavY/2UfyxygJDTcSGO+pCQMdC9JJEyMvaS50AtZQ==}
     engines: {node: '>=18.20.0'}
     peerDependencies:
       webdriverio: ^9.0.0
@@ -2612,8 +2612,8 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
-  magic-string@1.4.3:
-    resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
+  magic-string@1.4.5:
+    resolution: {integrity: sha512-oLLC2+YvQUfAa+vxoufE/yc1icb87M9iXIRqAoR/2EhE/8cb3SF/+Gi0c2By1B+5Vz2e2vQtUvHiu1+63Znh+w==}
 
   marked@18.0.7:
     resolution: {integrity: sha512-iDVQ5ldaiKXn6b2JroX5kgRfmwgqolW7NpaEzTl1k/2Zh1njIEN9yniyLV/mOvWwtsE8OGgkjsCYvijuPk1dtA==}
@@ -3206,8 +3206,8 @@ packages:
   text-decoder@1.2.7:
     resolution: {integrity: sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==}
 
-  tinybench@6.2.2:
-    resolution: {integrity: sha512-nIZ2N2dFpjBsg2hgitKu7mA+FvsIJuGJOwysRngmVRRmWgR/UyPjwJj8c/fT/dhm8EkHnF5EOogRf+0Z2qrimA==}
+  tinybench@6.2.3:
+    resolution: {integrity: sha512-Al01C2JIBnO2CXCAPbpAl6sUiOZHeThGtHYNTa51JRw9PyWOCdr+9Ong05R4qg/Sk3+H645E8ov1h2c58ityNw==}
     engines: {node: '>=20.0.0'}
 
   tinyexec@1.3.1:
@@ -3387,20 +3387,20 @@ packages:
       yaml:
         optional: true
 
-  vitest@5.0.5:
-    resolution: {integrity: sha512-cPODOMF8YnkiiYtDdHo6n4wWmBrOBBbOIYH2d33M4l3CdNn72h+qMmO6uXffUN6A5AZFXNND/d+krS9mgkXRfg==}
+  vitest@5.1.0:
+    resolution: {integrity: sha512-MzmNFnrwa8v8lF1bLxw3UJ4EREwVOVb75VqJZmUDRjJ6EluK/x9th7qTbaeDk41WxE1GxWqmTXcdsfobfH5sOA==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
       '@types/node': ^22.0.0 || >=24.0.0
-      '@vitest/browser-playwright': 5.0.5
-      '@vitest/browser-preview': 5.0.5
+      '@vitest/browser-playwright': 5.1.0
+      '@vitest/browser-preview': 5.1.0
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
-      '@vitest/coverage-istanbul': 5.0.5
-      '@vitest/coverage-v8': 5.0.5
-      '@vitest/ui': 5.0.5
+      '@vitest/coverage-istanbul': 5.1.0
+      '@vitest/coverage-v8': 5.1.0
+      '@vitest/ui': 5.1.0
       happy-dom: '*'
       jsdom: '*'
       vite: ^6.4.0 || ^7.0.0 || ^8.0.0
@@ -3961,13 +3961,13 @@ snapshots:
       '@types/yargs': 17.0.35
       chalk: 4.1.2
 
-  '@jridgewell/resolve-uri@3.1.2': {}
+  '@jridgewell/resolve-uri@3.1.3': {}
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
-      '@jridgewell/resolve-uri': 3.1.2
+      '@jridgewell/resolve-uri': 3.1.3
       '@jridgewell/sourcemap-codec': 1.6.0
 
   '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
@@ -4364,12 +4364,12 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
 
-  '@vitest/mocker@5.0.5(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))':
+  '@vitest/mocker@5.1.0(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
-      '@vitest/spy': 5.0.5
+      '@vitest/spy': 5.1.0
       estree-walker: 3.0.3
-      magic-string: 1.4.3
+      magic-string: 1.4.5
     optionalDependencies:
       vite: 8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
 
@@ -4394,7 +4394,7 @@ snapshots:
       magic-string: 0.30.21
       pathe: 2.0.3
 
-  '@vitest/spy@5.0.5': {}
+  '@vitest/spy@5.1.0': {}
 
   '@vitest/utils@4.1.10':
     dependencies:
@@ -4538,10 +4538,10 @@ snapshots:
       - react-native-b4a
       - supports-color
 
-  '@wdio/native-core@1.3.0(tsx@4.23.15)':
+  '@wdio/native-core@1.3.1(tsx@4.23.15)':
     dependencies:
       '@wdio/logger': 9.29.1
-      '@wdio/native-types': 2.6.0
+      '@wdio/native-types': 2.6.1
       '@wdio/native-utils': 2.5.0(tsx@4.23.15)
       debug: 4.4.3(supports-color@8.1.1)
       get-port: 7.2.0
@@ -4552,9 +4552,9 @@ snapshots:
 
   '@wdio/native-spy@1.1.0': {}
 
-  '@wdio/native-spy@1.4.0': {}
+  '@wdio/native-spy@1.4.1': {}
 
-  '@wdio/native-types@2.6.0': {}
+  '@wdio/native-types@2.6.1': {}
 
   '@wdio/native-utils@2.5.0(tsx@4.23.15)':
     dependencies:
@@ -4641,13 +4641,13 @@ snapshots:
       - supports-color
       - tsx
 
-  '@wdio/tauri-service@1.5.0(expect-webdriverio@5.7.0)(tsx@4.23.15)(webdriverio@9.29.1)':
+  '@wdio/tauri-service@1.5.1(expect-webdriverio@5.7.0)(tsx@4.23.15)(webdriverio@9.29.1)':
     dependencies:
       '@wdio/globals': 9.31.3(expect-webdriverio@5.7.0)(webdriverio@9.29.1)
       '@wdio/logger': 9.29.1
-      '@wdio/native-core': 1.3.0(tsx@4.23.15)
-      '@wdio/native-spy': 1.4.0
-      '@wdio/native-types': 2.6.0
+      '@wdio/native-core': 1.3.1(tsx@4.23.15)
+      '@wdio/native-spy': 1.4.1
+      '@wdio/native-types': 2.6.1
       '@wdio/native-utils': 2.5.0(tsx@4.23.15)
       '@wdio/spec-reporter': 9.31.2
       '@wdio/types': 9.31.2
@@ -5991,7 +5991,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  magic-string@1.4.3:
+  magic-string@1.4.5:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
@@ -6644,7 +6644,7 @@ snapshots:
     transitivePeerDependencies:
       - react-native-b4a
 
-  tinybench@6.2.2: {}
+  tinybench@6.2.3: {}
 
   tinyexec@1.3.1: {}
 
@@ -6766,18 +6766,18 @@ snapshots:
       tsx: 4.23.15
       yaml: 2.9.0
 
-  vitest@5.0.5(@types/node@26.4.0)(jsdom@30.0.1)(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)):
+  vitest@5.1.0(@types/node@26.4.0)(jsdom@30.0.1)(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.5(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+      '@vitest/mocker': 5.1.0(vite@8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
       chai: 6.3.0
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
-      magic-string: 1.4.3
+      magic-string: 1.4.5
       obug: 3.0.0
       picomatch: 4.0.7
       std-env: 4.3.0
-      tinybench: 6.2.2
+      tinybench: 6.2.3
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       vite: 8.3.5(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)

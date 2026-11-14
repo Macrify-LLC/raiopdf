@@ -8,6 +8,6 @@
     "typecheck": "echo \"No TypeScript sources in @raiopdf/shell\""
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.12.4"
   }
 }

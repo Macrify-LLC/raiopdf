@@ -65,6 +65,9 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned until tauri-build understands Cargo 1.100's new build-dir layout.
+          toolchain: 1.99.1
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -177,6 +180,9 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned until tauri-build understands Cargo 1.100's new build-dir layout.
+          toolchain: 1.99.1
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -307,6 +313,9 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned until tauri-build understands Cargo 1.100's new build-dir layout.
+          toolchain: 1.99.1
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -607,6 +616,9 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned until tauri-build understands Cargo 1.100's new build-dir layout.
+          toolchain: 1.99.1
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2

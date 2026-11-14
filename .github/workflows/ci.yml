@@ -102,7 +102,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache Rust build output
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # The cache key has the runner OS but not the image version, so name
           # the image: build-script output linked against one Ubuntu's system
@@ -194,7 +194,7 @@ jobs:
           toolchain: 1.99.1
 
       - name: Cache Rust build output
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Keep in step with runs-on (see the Shell job's cache step).
           prefix-key: v0-rust-ubuntu-26.04

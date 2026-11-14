@@ -70,7 +70,7 @@ jobs:
           toolchain: 1.99.1
 
       - name: Cache Rust build output
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Unlike release.yml: the canary's only Rust build is build:external-bins,
           # which runs in the root Cargo workspace (no Tauri shell bundle here).
@@ -185,7 +185,7 @@ jobs:
           toolchain: 1.99.1
 
       - name: Cache Rust build output
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # apps/shell/src-tauri is a root Cargo workspace member and
           # build:external-bins writes the engine-host into root target/release, so
@@ -318,7 +318,7 @@ jobs:
           toolchain: 1.99.1
 
       - name: Cache Rust build output
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -501,7 +501,7 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $cargoBin
 
       - name: Cache Rust build output
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -621,7 +621,7 @@ jobs:
           toolchain: 1.99.1
 
       - name: Cache Rust build output
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 

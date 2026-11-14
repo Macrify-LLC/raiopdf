@@ -343,7 +343,9 @@ export function useEditing(
       .getFieldObjects()
       .then((fields) => {
         if (!disposed) {
-          setHasFormFields(Boolean(fields && Object.keys(fields).length > 0));
+          // pdf.js >= 6.5 resolves a Map (it was a plain object before), so
+          // count with `.size`; `Object.keys` on a Map is always empty.
+          setHasFormFields(Boolean(fields && fields.size > 0));
         }
       })
       .catch(() => {

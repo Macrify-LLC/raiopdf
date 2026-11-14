@@ -14,6 +14,20 @@ updates:
           - react-dom
           - "@types/react"
           - "@types/react-dom"
+      # The WebdriverIO packages in apps/shell/e2e move together, and
+      # @wdio/tauri-service depends on an exact @wdio/types 9.x. A PR that
+      # bumps one of them alone (#389: @wdio/types to 10) leaves the set
+      # mismatched in a path PR CI never runs.
+      wdio:
+        patterns:
+          - webdriverio
+          - "@wdio/*"
+    ignore:
+      # Hold the next WebdriverIO major until @wdio/tauri-service supports it.
+      - dependency-name: webdriverio
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@wdio/*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: cargo
     directory: /apps/shell/src-tauri

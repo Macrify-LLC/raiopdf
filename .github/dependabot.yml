@@ -28,6 +28,11 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@wdio/*"
         update-types: ["version-update:semver-major"]
+      # The types track the Node runtime (24: .nvmrc, engines, CI). A newer
+      # major would let the type checker accept APIs Node 24 doesn't have.
+      # Raise this together with the runtime.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: cargo
     directory: /apps/shell/src-tauri

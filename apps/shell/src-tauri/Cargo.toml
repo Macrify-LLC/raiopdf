@@ -15,7 +15,7 @@ name = "raiopdf-shell"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 engine-sidecar-core = { path = "../../../crates/engine-sidecar-core" }
@@ -24,12 +24,12 @@ fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-tauri = { version = "2.11.5", features = [] }
-tauri-plugin-dialog = "2.7.1"
-tauri-plugin-opener = "2"
-tauri-plugin-process = "2"
-tauri-plugin-shell = "2.3.5"
-tauri-plugin-updater = "2"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.4"
+tauri-plugin-opener = "2.7.3"
+tauri-plugin-process = "2.4.0"
+tauri-plugin-shell = "2.6.0"
+tauri-plugin-updater = "2.14.1"
 tauri-plugin-wdio = { version = "1", optional = true }
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }

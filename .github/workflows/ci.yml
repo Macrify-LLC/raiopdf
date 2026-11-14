@@ -97,8 +97,6 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          # Pinned until tauri-build understands Cargo 1.100's new build-dir layout.
-          toolchain: 1.99.1
           components: clippy, rustfmt
 
       - name: Cache Rust build output
@@ -157,8 +155,6 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          # Pinned until tauri-build understands Cargo 1.100's new build-dir layout.
-          toolchain: 1.99.1
           components: clippy, rustfmt
 
       - name: Prepare arm64 external-bin stubs
@@ -190,8 +186,6 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        with:
-          toolchain: 1.99.1
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3

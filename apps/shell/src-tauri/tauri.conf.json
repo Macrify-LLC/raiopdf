@@ -56,6 +56,7 @@
       "open": "https://.+"
     },
     "updater": {
+      "allowDowngrades": false,
       "endpoints": [
         "https://github.com/Macrify-LLC/raiopdf/releases/latest/download/latest.json"
       ],
